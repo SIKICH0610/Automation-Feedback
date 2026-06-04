@@ -1,6 +1,16 @@
-# Automation Feedback Prototype
+# Automation Feedback
 
 Generate one parent-facing feedback entry from the provided Excel tracker.
+
+## Project Files
+
+- `feedback_generator.py`: preview or write feedback for one row, a row range, or the whole sheet.
+- `class_review_builder.py`: create or overwrite `class_review.txt` from teacher text, notes, or slides.
+- `workbook_setup.py`: prepare optional workbook columns such as `Additional Comment`.
+- `openai_api.py`: shared OpenAI API helper.
+- `class_review.txt`: editable class-level paragraph used as paragraph 1.
+- `Geo_TTh_Student_Script_fixed_rows_only.xlsx`: local workbook copy used by default.
+- `docs/commands.md`: quick command reference.
 
 The Excel feedback form also lives in this project folder:
 
@@ -9,6 +19,20 @@ Geo_TTh_Student_Script_fixed_rows_only.xlsx
 ```
 
 By default, the scripts read and write this local copy.
+
+## Setup
+
+Install dependencies once:
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+Optional API key for GPT-assisted workflows:
+
+```powershell
+$env:OPENAI_API_KEY="your_api_key_here"
+```
 
 ## Prepare the workbook
 
