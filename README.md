@@ -14,6 +14,10 @@ Use this column for extra notes that should be added to the end of paragraph 2. 
 
 ## Create the class review file
 
+The editable class review file lives in this project folder as `class_review.txt`.
+Teachers can edit that file directly before generating feedback.
+When new slides or class notes are provided, run `class_review_builder.py` again and it will overwrite `class_review.txt`.
+
 Teacher-written text:
 
 ```powershell
