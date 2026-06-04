@@ -166,6 +166,41 @@ def load_student_row(workbook_path: Path, sheet_name: str, excel_row: int) -> tu
     return workbook, StudentRow(excel_row=excel_row, values=values)
 
 
+def student_from_worksheet(worksheet: Any, headers: list[Any], excel_row: int) -> StudentRow | None:
+    values = {
+        str(header): worksheet.cell(excel_row, col).value
+        for col, header in enumerate(headers, start=1)
+        if header
+    }
+
+    if not values.get("First Name") and not values.get("Last Name"):
+        return None
+    return StudentRow(excel_row=excel_row, values=values)
+
+
+def find_column(headers: list[Any], column_name: str) -> int:
+    try:
+        return headers.index(column_name) + 1
+    except ValueError as exc:
+        raise ValueError(f"The workbook does not have a {column_name!r} column.") from exc
+
+
+def iter_student_rows(
+    worksheet: Any,
+    *,
+    start_row: int = 2,
+    end_row: int | None = None,
+) -> list[StudentRow]:
+    headers = [worksheet.cell(1, col).value for col in range(1, worksheet.max_column + 1)]
+    final_row = end_row or worksheet.max_row
+    students: list[StudentRow] = []
+    for row_number in range(start_row, final_row + 1):
+        student = student_from_worksheet(worksheet, headers, row_number)
+        if student:
+            students.append(student)
+    return students
+
+
 def phrase_for(field: str, value: Any, language: str) -> str | None:
     if value in (None, ""):
         return None
@@ -379,10 +414,7 @@ def write_feedback(
 ) -> None:
     worksheet = workbook[sheet_name]
     headers = [worksheet.cell(1, col).value for col in range(1, worksheet.max_column + 1)]
-    try:
-        feedback_col = headers.index("Feedback") + 1
-    except ValueError as exc:
-        raise ValueError("The workbook does not have a Feedback column.") from exc
+    feedback_col = find_column(headers, "Feedback")
 
     worksheet.cell(excel_row, feedback_col).value = feedback
     workbook.save(workbook_path)
@@ -398,13 +430,33 @@ def write_column_value(
 ) -> None:
     worksheet = workbook[sheet_name]
     headers = [worksheet.cell(1, col).value for col in range(1, worksheet.max_column + 1)]
-    try:
-        column = headers.index(column_name) + 1
-    except ValueError as exc:
-        raise ValueError(f"The workbook does not have a {column_name!r} column.") from exc
+    column = find_column(headers, column_name)
 
     worksheet.cell(excel_row, column).value = value
     workbook.save(workbook_path)
+
+
+def set_column_value(
+    worksheet: Any,
+    headers: list[Any],
+    excel_row: int,
+    column_name: str,
+    value: str,
+) -> None:
+    worksheet.cell(excel_row, find_column(headers, column_name)).value = value
+
+
+def print_student_result(student: StudentRow, feedback: str | None) -> None:
+    print("=" * 72)
+    print(f"Row: {student.excel_row}")
+    print(f"Student: {student.full_name}")
+    print(f"UID: {normalize_uid(student.values.get('uid'))}")
+    print()
+    if feedback is None:
+        print("Skipped: student was absent, so no feedback comment was generated.")
+    else:
+        print(feedback)
+    print()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -418,6 +470,22 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=2,
         help="Excel row number to generate. Row 2 is the first student row.",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Generate feedback for every student row in the selected sheet.",
+    )
+    parser.add_argument(
+        "--start-row",
+        type=int,
+        default=2,
+        help="First row to use with --all. Defaults to 2.",
+    )
+    parser.add_argument(
+        "--end-row",
+        type=int,
+        help="Last row to use with --all. Omit to continue through the sheet.",
     )
     parser.add_argument(
         "--write",
@@ -459,47 +527,71 @@ def main() -> None:
     if args.class_review_file:
         class_review = args.class_review_file.read_text(encoding="utf-8").strip()
 
-    workbook, student = load_student_row(args.workbook, args.sheet, args.row)
-    if args.revise_remark:
-        revised_remark = revise_remark_with_gpt(student, args.model)
-        if revised_remark:
-            student.values["Remark for Student"] = revised_remark
-            print("Revised remark:")
-            print(revised_remark)
-            print()
-            if args.write_revised_remark:
-                write_column_value(
-                    workbook,
-                    args.workbook,
-                    args.sheet,
-                    student.excel_row,
-                    "Remark for Student",
-                    revised_remark,
-                )
-                workbook, student = load_student_row(args.workbook, args.sheet, args.row)
+    workbook = load_workbook(args.workbook)
+    if args.sheet not in workbook.sheetnames:
+        available = ", ".join(workbook.sheetnames)
+        raise ValueError(f"Sheet {args.sheet!r} not found. Available sheets: {available}")
 
-    feedback = generate_feedback(
-        student,
-        class_review=class_review,
-        use_api=args.use_api,
-        model=args.model,
-    )
+    worksheet = workbook[args.sheet]
+    headers = [worksheet.cell(1, col).value for col in range(1, worksheet.max_column + 1)]
+    if args.all:
+        students = iter_student_rows(
+            worksheet,
+            start_row=args.start_row,
+            end_row=args.end_row,
+        )
+    else:
+        student = student_from_worksheet(worksheet, headers, args.row)
+        if not student:
+            raise ValueError(f"Row {args.row} does not look like a student row.")
+        students = [student]
 
     print(f"Sheet: {args.sheet}")
-    print(f"Row: {student.excel_row}")
-    print(f"Student: {student.full_name}")
-    print(f"UID: {normalize_uid(student.values.get('uid'))}")
+    print(f"Mode: {'all rows' if args.all else 'single row'}")
+    print(f"Write feedback: {'yes' if args.write else 'no, preview only'}")
     print()
-    if feedback is None:
-        print("Skipped: student was absent, so no feedback comment was generated.")
-        return
 
-    print(feedback)
+    generated = 0
+    skipped = 0
+    for student in students:
+        if args.revise_remark:
+            revised_remark = revise_remark_with_gpt(student, args.model)
+            if revised_remark:
+                student.values["Remark for Student"] = revised_remark
+                print("=" * 72)
+                print(f"Row {student.excel_row} revised remark:")
+                print(revised_remark)
+                print()
+                if args.write_revised_remark:
+                    set_column_value(
+                        worksheet,
+                        headers,
+                        student.excel_row,
+                        "Remark for Student",
+                        revised_remark,
+                    )
 
-    if args.write:
-        write_feedback(workbook, args.workbook, args.sheet, student.excel_row, feedback)
-        print()
-        print("Wrote feedback to the workbook.")
+        feedback = generate_feedback(
+            student,
+            class_review=class_review,
+            use_api=args.use_api,
+            model=args.model,
+        )
+        print_student_result(student, feedback)
+
+        if feedback is None:
+            skipped += 1
+            continue
+
+        generated += 1
+        if args.write:
+            set_column_value(worksheet, headers, student.excel_row, "Feedback", feedback)
+
+    if args.write or args.write_revised_remark:
+        workbook.save(args.workbook)
+        print(f"Saved workbook: {args.workbook}")
+
+    print(f"Done. Generated: {generated}. Skipped: {skipped}.")
 
 
 if __name__ == "__main__":

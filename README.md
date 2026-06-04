@@ -57,6 +57,20 @@ python feedback_generator.py --sheet "Geo TTh" --row 2 --class-review-file class
 
 The command previews the generated feedback without changing the workbook.
 
+## Preview several or all entries
+
+Preview rows 2 through 5:
+
+```powershell
+python feedback_generator.py --sheet "Geo TTh" --all --start-row 2 --end-row 5 --class-review-file class_review.txt
+```
+
+Preview every student row in the sheet:
+
+```powershell
+python feedback_generator.py --sheet "Geo TTh" --all --class-review-file class_review.txt
+```
+
 ## Write one entry back to Excel
 
 ```powershell
@@ -64,6 +78,18 @@ python feedback_generator.py --sheet "Geo TTh" --row 2 --class-review-file class
 ```
 
 This writes the generated text into the `Feedback` column for that row.
+
+## Write all entries back to Excel
+
+```powershell
+python feedback_generator.py --sheet "Geo TTh" --all --class-review-file class_review.txt --write
+```
+
+Test a smaller range before writing everyone:
+
+```powershell
+python feedback_generator.py --sheet "Geo TTh" --all --start-row 2 --end-row 5 --class-review-file class_review.txt --write
+```
 
 ## API-assisted student comments
 
@@ -84,6 +110,9 @@ python feedback_generator.py --sheet "Geo TTh" --row 2 --class-review-file class
 - `--workbook`: Path to the Excel file. Defaults to `./Geo_TTh_Student_Script_fixed_rows_only.xlsx`.
 - `--sheet`: Sheet name. Defaults to `Geo TTh`.
 - `--row`: Excel row number. Row `2` is the first student row.
+- `--all`: Generate feedback for every student row in the sheet.
+- `--start-row`: First row for `--all`. Defaults to `2`.
+- `--end-row`: Last row for `--all`. Omit to continue through the sheet.
 - `--class-review`: What the class covered today. This becomes the first paragraph.
 - `--class-review-file`: Optional text file containing the class review.
 - `--use-api`: Use OpenAI to polish the student-specific parent comment.
