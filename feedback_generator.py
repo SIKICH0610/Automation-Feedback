@@ -10,9 +10,8 @@ from openpyxl import load_workbook
 from openai_api import DEFAULT_OPENAI_MODEL, create_response
 
 
-DEFAULT_WORKBOOK = (
-    Path.home() / "Downloads" / "Geo_TTh_Student_Script_fixed_rows_only.xlsx"
-)
+PROJECT_DIR = Path(__file__).resolve().parent
+DEFAULT_WORKBOOK = PROJECT_DIR / "Geo_TTh_Student_Script_fixed_rows_only.xlsx"
 DEFAULT_SHEET = "Geo TTh"
 ADDITIONAL_COMMENT_COLUMN = "Additional Comment"
 

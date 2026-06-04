@@ -2,6 +2,14 @@
 
 Generate one parent-facing feedback entry from the provided Excel tracker.
 
+The Excel feedback form also lives in this project folder:
+
+```text
+Geo_TTh_Student_Script_fixed_rows_only.xlsx
+```
+
+By default, the scripts read and write this local copy.
+
 ## Prepare the workbook
 
 Add the optional `Additional Comment` column to every sheet:
@@ -73,7 +81,7 @@ python feedback_generator.py --sheet "Geo TTh" --row 2 --class-review-file class
 
 ## Options
 
-- `--workbook`: Path to the Excel file. Defaults to `~/Downloads/Geo_TTh_Student_Script_fixed_rows_only.xlsx`.
+- `--workbook`: Path to the Excel file. Defaults to `./Geo_TTh_Student_Script_fixed_rows_only.xlsx`.
 - `--sheet`: Sheet name. Defaults to `Geo TTh`.
 - `--row`: Excel row number. Row `2` is the first student row.
 - `--class-review`: What the class covered today. This becomes the first paragraph.
