@@ -30,7 +30,7 @@ Build a feedback automation workflow for class rosters:
 - Use GPT to summarize uploaded slides into `class_review.txt`.
 - Use GPT to revise Chinese teacher notes in `Remark for Student`.
 - Use GPT to translate and blend `Additional Comment` into paragraph 2.
-- Later: batch API generation with review/export before writing to Excel.
+- Batch generation can now export a review CSV before writing to Excel.
 
 ## Data Safety
 

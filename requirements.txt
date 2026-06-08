@@ -1,2 +1,4 @@
 openpyxl>=3.1.0
+pyperclip>=1.8.2
+pywinauto>=0.6.8
 

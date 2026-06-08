@@ -5,6 +5,7 @@ Generate one parent-facing feedback entry from the provided Excel tracker.
 ## Project Files
 
 - `feedback_generator.py`: preview or write feedback for one row, a row range, or the whole sheet.
+- `paste_sender.py`: supervised one-row desktop paste helper for WeCom. It checks app status and never sends.
 - `class_review_builder.py`: create or overwrite `class_review.txt` from teacher text, notes, or slides.
 - `workbook_setup.py`: prepare optional workbook columns such as `Additional Comment`.
 - `openai_api.py`: shared OpenAI API helper.
@@ -89,6 +90,12 @@ Preview rows 2 through 5:
 python feedback_generator.py --sheet "Geo TTh" --all --start-row 2 --end-row 5 --class-review-file class_review.txt
 ```
 
+Save that preview to a spreadsheet-friendly CSV for review:
+
+```powershell
+python feedback_generator.py --sheet "Geo TTh" --all --start-row 2 --end-row 5 --class-review-file class_review.txt --review-csv review_preview.csv
+```
+
 Preview every student row in the sheet:
 
 ```powershell
@@ -129,6 +136,34 @@ Revise the Chinese teacher note, save it back to `Remark for Student`, generate 
 python feedback_generator.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --revise-remark --write-revised-remark --use-api --write
 ```
 
+## Supervised paste helper
+
+Check one row and the needed desktop app without pasting:
+
+```powershell
+python paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --status
+```
+
+Open the needed app if the script can find it:
+
+```powershell
+python paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --open-app
+```
+
+Search WeCom by UID, press Enter to open the first relevant result, focus the message box, and paste without sending:
+
+```powershell
+python paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --mode paste-only
+```
+
+The paste helper does not press Enter after pasting. If WeCom is installed in a custom location, pass `--wecom-exe "C:\path\to\WXWork.exe"` or set `WECOM_EXE`. If Enter cannot open the result on a computer, try `--ui-control-result-open`, `--coordinate-result-click`, or `--manual-result-click`. Add `--require-verification` if you want the script to stop whenever it cannot verify the chat by UI text.
+
+To inspect which safe WeCom search candidates the script sees:
+
+```powershell
+python paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --debug-search-results
+```
+
 ## Options
 
 - `--workbook`: Path to the Excel file. Defaults to `./Geo_TTh_Student_Script_fixed_rows_only.xlsx`.
@@ -137,6 +172,7 @@ python feedback_generator.py --sheet "Geo TTh" --row 2 --class-review-file class
 - `--all`: Generate feedback for every student row in the sheet.
 - `--start-row`: First row for `--all`. Defaults to `2`.
 - `--end-row`: Last row for `--all`. Omit to continue through the sheet.
+- `--review-csv`: Save generated preview rows to a UTF-8 CSV with row, UID, student, status, revised remark, and feedback columns.
 - `--class-review`: What the class covered today. This becomes the first paragraph.
 - `--class-review-file`: Optional text file containing the class review.
 - `--use-api`: Use OpenAI to polish the student-specific parent comment.

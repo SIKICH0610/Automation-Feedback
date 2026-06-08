@@ -36,6 +36,12 @@ Small range:
 python feedback_generator.py --sheet "Geo TTh" --all --start-row 2 --end-row 5 --class-review-file class_review.txt
 ```
 
+Small range with review CSV:
+
+```powershell
+python feedback_generator.py --sheet "Geo TTh" --all --start-row 2 --end-row 5 --class-review-file class_review.txt --review-csv review_preview.csv
+```
+
 All students:
 
 ```powershell
@@ -54,5 +60,31 @@ Write all rows:
 
 ```powershell
 python feedback_generator.py --sheet "Geo TTh" --all --class-review-file class_review.txt --write
+```
+
+## Supervised Paste
+
+Check readiness:
+
+```powershell
+python paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --status
+```
+
+Open the needed app:
+
+```powershell
+python paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --open-app
+```
+
+Paste one WeCom row without sending. The script searches by UID, opens the best matching WeCom result, focuses the message box, and pastes:
+
+```powershell
+python paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --mode paste-only
+```
+
+Debug safe WeCom search candidates:
+
+```powershell
+python paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --debug-search-results
 ```
 

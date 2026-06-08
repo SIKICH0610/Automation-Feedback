@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -459,6 +460,21 @@ def print_student_result(student: StudentRow, feedback: str | None) -> None:
     print()
 
 
+def export_review_csv(rows: list[dict[str, str]], output_path: Path) -> None:
+    fieldnames = [
+        "row",
+        "uid",
+        "student",
+        "status",
+        "revised_remark",
+        "feedback",
+    ]
+    with output_path.open("w", newline="", encoding="utf-8-sig") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Generate one parent-facing student feedback entry from the Excel tracker."
@@ -491,6 +507,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--write",
         action="store_true",
         help="Write generated text back to the Feedback column. Preview-only by default.",
+    )
+    parser.add_argument(
+        "--review-csv",
+        type=Path,
+        help="Save generated previews to a CSV for review before or while writing to Excel.",
     )
     parser.add_argument(
         "--class-review",
@@ -553,7 +574,9 @@ def main() -> None:
 
     generated = 0
     skipped = 0
+    review_rows: list[dict[str, str]] = []
     for student in students:
+        revised_remark = ""
         if args.revise_remark:
             revised_remark = revise_remark_with_gpt(student, args.model)
             if revised_remark:
@@ -579,6 +602,17 @@ def main() -> None:
         )
         print_student_result(student, feedback)
 
+        review_rows.append(
+            {
+                "row": str(student.excel_row),
+                "uid": normalize_uid(student.values.get("uid")),
+                "student": student.full_name,
+                "status": "skipped_absent" if feedback is None else "generated",
+                "revised_remark": revised_remark,
+                "feedback": feedback or "",
+            }
+        )
+
         if feedback is None:
             skipped += 1
             continue
@@ -590,6 +624,10 @@ def main() -> None:
     if args.write or args.write_revised_remark:
         workbook.save(args.workbook)
         print(f"Saved workbook: {args.workbook}")
+
+    if args.review_csv:
+        export_review_csv(review_rows, args.review_csv)
+        print(f"Saved review CSV: {args.review_csv}")
 
     print(f"Done. Generated: {generated}. Skipped: {skipped}.")
 
