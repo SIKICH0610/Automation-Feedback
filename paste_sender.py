@@ -74,7 +74,7 @@ def build_app_specs(
     return {
         "wecom": DesktopAppSpec(
             key="wecom",
-            display_name="WeCom",
+            display_name="WeCom / 企业微信",
             title_re=wecom_title_re,
             process_names=("WXWork.exe", "WeCom.exe"),
             env_path_var="WECOM_EXE",
@@ -695,7 +695,7 @@ def print_readiness(job: PasteJob, status: DesktopAppStatus) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Supervised paste helper for one WeCom feedback message. It never sends."
+        description="Supervised paste helper for one WeCom / 企业微信 feedback message. It never sends."
     )
     parser.add_argument("--workbook", type=Path, default=DEFAULT_WORKBOOK)
     parser.add_argument("--sheet", default=DEFAULT_SHEET)
@@ -717,7 +717,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--debug-search-results",
         action="store_true",
-        help="Search WeCom and print safe candidate UI elements without opening, pasting, or sending.",
+        help="Search WeCom / 企业微信 and print safe candidate UI elements without opening, pasting, or sending.",
     )
     parser.add_argument(
         "--mode",
@@ -733,17 +733,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--auto-open-search-result",
         action="store_true",
-        help="After searching WeCom, press Enter only and do not use fallback strategies.",
+        help="After searching WeCom / 企业微信, press Enter only and do not use fallback strategies.",
     )
     parser.add_argument(
         "--ui-control-result-open",
         action="store_true",
-        help="After searching WeCom, use UI Automation before fallback strategies.",
+        help="After searching WeCom / 企业微信, use UI Automation before fallback strategies.",
     )
     parser.add_argument(
         "--keyboard-result-open",
         action="store_true",
-        help="After searching WeCom, use Down then Enter to open the first result.",
+        help="After searching WeCom / 企业微信, use Down then Enter to open the first result.",
     )
     parser.add_argument(
         "--coordinate-result-click",
@@ -753,7 +753,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--manual-result-click",
         action="store_true",
-        help="After searching WeCom, wait for you to click the search result.",
+        help="After searching WeCom / 企业微信, wait for you to click the search result.",
     )
     parser.add_argument(
         "--require-verification",

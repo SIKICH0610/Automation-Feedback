@@ -76,7 +76,7 @@ Open the needed app:
 python paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --open-app
 ```
 
-Paste one WeCom row without sending. The script searches by UID, opens the best matching WeCom result, focuses the message box, and pastes:
+Paste one WeCom / 企业微信 row without sending. The script searches by UID, opens the best matching result, focuses the message box, and pastes:
 
 ```powershell
 python paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --mode paste-only

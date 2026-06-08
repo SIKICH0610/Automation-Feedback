@@ -5,7 +5,7 @@ Generate one parent-facing feedback entry from the provided Excel tracker.
 ## Project Files
 
 - `feedback_generator.py`: preview or write feedback for one row, a row range, or the whole sheet.
-- `paste_sender.py`: supervised one-row desktop paste helper for WeCom. It checks app status and never sends.
+- `paste_sender.py`: supervised one-row desktop paste helper for WeCom / 企业微信. It checks app status and never sends.
 - `class_review_builder.py`: create or overwrite `class_review.txt` from teacher text, notes, or slides.
 - `workbook_setup.py`: prepare optional workbook columns such as `Additional Comment`.
 - `openai_api.py`: shared OpenAI API helper.
@@ -156,7 +156,7 @@ Search WeCom by UID, press Enter to open the first relevant result, focus the me
 python paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --mode paste-only
 ```
 
-The paste helper does not press Enter after pasting. If WeCom is installed in a custom location, pass `--wecom-exe "C:\path\to\WXWork.exe"` or set `WECOM_EXE`. If Enter cannot open the result on a computer, try `--ui-control-result-open`, `--coordinate-result-click`, or `--manual-result-click`. Add `--require-verification` if you want the script to stop whenever it cannot verify the chat by UI text.
+The paste helper recognizes window titles containing `WeCom`, `企业微信`, or `WXWork` by default. It does not press Enter after pasting. If WeCom / 企业微信 is installed in a custom location, pass `--wecom-exe "C:\path\to\WXWork.exe"` or set `WECOM_EXE`. If Enter cannot open the result on a computer, try `--ui-control-result-open`, `--coordinate-result-click`, or `--manual-result-click`. Add `--require-verification` if you want the script to stop whenever it cannot verify the chat by UI text.
 
 To inspect which safe WeCom search candidates the script sees:
 
