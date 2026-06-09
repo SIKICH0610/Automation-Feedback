@@ -32,7 +32,4 @@ Build a feedback automation workflow for class rosters:
 - Use GPT to translate and blend `Additional Comment` into paragraph 2.
 - Batch generation can now export a review CSV before writing to Excel.
 
-## Data Safety
-
-The workbook may contain student information. Keep the GitHub repo private or replace the workbook with a blank template before sharing publicly.
 

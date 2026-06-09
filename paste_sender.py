@@ -48,6 +48,7 @@ class DesktopAppStatus:
     launch_attempted: bool = False
     launched: bool = False
     message: str = ""
+    dependency_error: str = ""
 
 
 @dataclass
@@ -106,12 +107,13 @@ def header_values(worksheet: Any) -> list[Any]:
     return [worksheet.cell(1, col).value for col in range(1, worksheet.max_column + 1)]
 
 
-def automation_dependency_ok() -> bool:
+def automation_dependency_status() -> tuple[bool, str]:
     try:
         import pywinauto  # noqa: F401
-    except Exception:
-        return False
-    return True
+        import pyperclip  # noqa: F401
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    return True, ""
 
 
 def process_is_running(process_names: tuple[str, ...]) -> bool:
@@ -142,12 +144,12 @@ def app_window_found(title_re: str) -> bool:
 
 
 def app_status(spec: DesktopAppSpec) -> DesktopAppStatus:
-    dependency_ok = automation_dependency_ok()
+    dependency_ok, dependency_error = automation_dependency_status()
     running = process_is_running(spec.process_names)
     window_found = app_window_found(spec.title_re) if dependency_ok else False
 
     if not dependency_ok:
-        message = "desktop automation dependencies are not installed"
+        message = "desktop automation dependencies are not available"
     elif window_found:
         message = "window found"
     elif running:
@@ -162,6 +164,7 @@ def app_status(spec: DesktopAppSpec) -> DesktopAppStatus:
         process_running=running,
         window_found=window_found,
         message=message,
+        dependency_error=dependency_error,
     )
 
 
@@ -211,6 +214,8 @@ def ensure_app_available(
     status = app_status(spec)
     if status.window_found or not open_if_missing:
         return status
+    if not status.dependency_ok:
+        return status
 
     launched = launch_app(spec, configured_path)
     status.launch_attempted = True
@@ -234,6 +239,9 @@ def ensure_app_available(
 def print_app_status(status: DesktopAppStatus) -> None:
     print(f"{status.display_name}: {status.message}")
     print(f"  dependency ok: {'yes' if status.dependency_ok else 'no'}")
+    if status.dependency_error:
+        print(f"  dependency error: {status.dependency_error}")
+        print("  install command: py -3.11 -m pip install -r requirements.txt")
     print(f"  process running: {'yes' if status.process_running else 'no'}")
     print(f"  window found: {'yes' if status.window_found else 'no'}")
     if status.launch_attempted:
@@ -884,6 +892,11 @@ def run_job(
         open_if_missing=not args.no_auto_open,
     )
     print_app_status(status)
+    if not status.dependency_ok:
+        raise RuntimeError(
+            "Stopped before paste because desktop automation dependencies are not available. "
+            "Run: py -3.11 -m pip install -r requirements.txt"
+        )
     if not status.window_found:
         raise RuntimeError("Stopped before paste because the needed app window is not available.")
 
