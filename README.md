@@ -23,11 +23,13 @@ By default, the scripts read and write this local copy.
 
 ## Setup
 
-Install dependencies once:
+First-time setup on Windows:
 
 ```powershell
-python -m pip install -r requirements.txt
+.\setup.ps1
 ```
+
+This creates a local `.venv` folder and installs the required packages there. VS Code is configured to use `.venv\Scripts\python.exe` for this workspace, so it will not accidentally use Python from another project.
 
 Optional API key for GPT-assisted workflows:
 
@@ -141,22 +143,34 @@ python feedback_generator.py --sheet "Geo TTh" --row 2 --class-review-file class
 Check one row and the needed desktop app without pasting:
 
 ```powershell
-python paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --status
+.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --status
 ```
 
 Open the needed app if the script can find it:
 
 ```powershell
-python paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --open-app
+.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --open-app
 ```
 
 Search WeCom by UID, press Enter to open the first relevant result, focus the message box, and paste without sending:
 
 ```powershell
-python paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --mode paste-only
+.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --mode paste-only
 ```
 
 The paste helper recognizes window titles containing `WeCom`, `企业微信`, or `WXWork` by default. It does not press Enter after pasting. If WeCom / 企业微信 is installed in a custom location, pass `--wecom-exe "C:\path\to\WXWork.exe"` or set `WECOM_EXE`. If Enter cannot open the result on a computer, try `--ui-control-result-open`, `--coordinate-result-click`, or `--manual-result-click`. Add `--require-verification` if you want the script to stop whenever it cannot verify the chat by UI text.
+
+Paste multiple WeCom rows automatically without sending:
+
+```powershell
+.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --rows 3,5 --class-review-file class_review.txt --mode paste-only
+```
+
+You can also use a row range. Non-WeCom rows are skipped in batch mode:
+
+```powershell
+.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --start-row 3 --end-row 5 --class-review-file class_review.txt --mode paste-only
+```
 
 To inspect which safe WeCom search candidates the script sees:
 

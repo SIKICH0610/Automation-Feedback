@@ -321,15 +321,50 @@ def build_paste_job(
     )
 
 
-def load_one_job(
+def parse_row_numbers(row_spec: str) -> list[int]:
+    rows: list[int] = []
+    for part in row_spec.split(","):
+        item = part.strip()
+        if not item:
+            continue
+        if "-" in item:
+            start_text, end_text = item.split("-", 1)
+            start = int(start_text.strip())
+            end = int(end_text.strip())
+            if end < start:
+                raise ValueError(f"Invalid row range {item!r}: end row is before start row.")
+            rows.extend(range(start, end + 1))
+        else:
+            rows.append(int(item))
+
+    if not rows:
+        raise ValueError("--rows did not contain any row numbers.")
+    return rows
+
+
+def selected_row_numbers(args: argparse.Namespace) -> list[int]:
+    if args.rows:
+        return parse_row_numbers(args.rows)
+
+    if args.start_row is not None or args.end_row is not None:
+        start = args.start_row if args.start_row is not None else args.row
+        end = args.end_row if args.end_row is not None else start
+        if end < start:
+            raise ValueError("--end-row cannot be before --start-row.")
+        return list(range(start, end + 1))
+
+    return [args.row]
+
+
+def load_jobs(
     workbook_path: Path,
     *,
     sheet_name: str,
-    row_number: int,
+    row_numbers: list[int],
     class_review: str,
     use_api: bool,
     model: str,
-) -> PasteJob:
+) -> list[PasteJob]:
     workbook = load_workbook(workbook_path, read_only=True)
     if sheet_name not in workbook.sheetnames:
         available = ", ".join(workbook.sheetnames)
@@ -337,16 +372,22 @@ def load_one_job(
 
     worksheet = workbook[sheet_name]
     headers = header_values(worksheet)
-    student = student_from_worksheet(worksheet, headers, row_number)
-    if not student:
-        raise ValueError(f"Row {row_number} does not look like a student row.")
+    jobs: list[PasteJob] = []
+    for row_number in row_numbers:
+        student = student_from_worksheet(worksheet, headers, row_number)
+        if not student:
+            raise ValueError(f"Row {row_number} does not look like a student row.")
 
-    return build_paste_job(
-        student,
-        class_review=class_review,
-        use_api=use_api,
-        model=model,
-    )
+        jobs.append(
+            build_paste_job(
+                student,
+                class_review=class_review,
+                use_api=use_api,
+                model=model,
+            )
+        )
+    workbook.close()
+    return jobs
 
 
 class WeComPasteRobot:
@@ -700,6 +741,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workbook", type=Path, default=DEFAULT_WORKBOOK)
     parser.add_argument("--sheet", default=DEFAULT_SHEET)
     parser.add_argument("--row", type=int, default=2)
+    parser.add_argument(
+        "--rows",
+        help="Comma-separated rows or ranges to process, such as 3,5 or 3-5.",
+    )
+    parser.add_argument(
+        "--start-row",
+        type=int,
+        help="First row for a batch range. Use with --end-row.",
+    )
+    parser.add_argument(
+        "--end-row",
+        type=int,
+        help="Last row for a batch range.",
+    )
     parser.add_argument("--class-review", default="")
     parser.add_argument("--class-review-file", type=Path)
     parser.add_argument("--use-api", action="store_true")
@@ -768,26 +823,29 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
-    args = build_parser().parse_args()
-    class_review = args.class_review
-    if args.class_review_file:
-        class_review = args.class_review_file.read_text(encoding="utf-8").strip()
+def open_strategy_from_args(args: argparse.Namespace) -> str:
+    if args.manual_result_click:
+        return "manual-click"
+    if args.auto_open_search_result:
+        return "enter"
+    if args.ui_control_result_open:
+        return "ui-control"
+    if args.keyboard_result_open:
+        return "keyboard"
+    if args.coordinate_result_click:
+        return "coordinate-click"
+    return "enter-first"
 
-    job = load_one_job(
-        args.workbook,
-        sheet_name=args.sheet,
-        row_number=args.row,
-        class_review=class_review,
-        use_api=args.use_api,
-        model=args.model,
-    )
+
+def run_job(
+    job: PasteJob,
+    *,
+    args: argparse.Namespace,
+    app_specs: dict[str, DesktopAppSpec],
+    batch_mode: bool,
+) -> bool:
     print_job(job)
 
-    app_specs = build_app_specs(
-        wecom_title_re=args.wecom_title_re,
-        whatsapp_title_re=args.whatsapp_title_re,
-    )
     if job.channel not in app_specs:
         raise ValueError(f"No desktop app setup is defined for channel {job.channel!r}.")
 
@@ -797,7 +855,7 @@ def main() -> None:
     if args.status:
         status = app_status(app_spec)
         print_readiness(job, status)
-        return
+        return status.dependency_ok and status.window_found and job.channel == "wecom"
 
     if args.open_app:
         status = ensure_app_available(
@@ -807,13 +865,17 @@ def main() -> None:
         )
         print_readiness(job, status)
         if args.mode == "dry-run":
-            return
+            return status.dependency_ok and status.window_found and job.channel == "wecom"
 
     if args.mode == "dry-run" and not args.debug_search_results:
         print("Dry run only. Nothing was pasted or sent.")
-        return
+        return True
 
     if job.channel != "wecom":
+        message = f"Skipping row {job.excel_row}: paste automation for {job.channel!r} is not implemented yet."
+        if batch_mode:
+            print(message)
+            return False
         raise RuntimeError("Only WeCom paste-only is implemented right now.")
 
     status = ensure_app_available(
@@ -832,23 +894,11 @@ def main() -> None:
 
     if args.debug_search_results:
         robot.print_search_result_candidates(job)
-        return
-
-    open_strategy = "enter-first"
-    if args.manual_result_click:
-        open_strategy = "manual-click"
-    elif args.auto_open_search_result:
-        open_strategy = "enter"
-    elif args.ui_control_result_open:
-        open_strategy = "ui-control"
-    elif args.keyboard_result_open:
-        open_strategy = "keyboard"
-    elif args.coordinate_result_click:
-        open_strategy = "coordinate-click"
+        return True
 
     robot.open_chat_from_search(
         job,
-        open_strategy=open_strategy,
+        open_strategy=open_strategy_from_args(args),
     )
     verified, reason = robot.verify_chat(job)
     print(f"Verification: {reason}")
@@ -860,6 +910,43 @@ def main() -> None:
 
     robot.paste_feedback(job.feedback)
     print("Pasted only. The script did not send the message.")
+    return True
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    class_review = args.class_review
+    if args.class_review_file:
+        class_review = args.class_review_file.read_text(encoding="utf-8").strip()
+
+    jobs = load_jobs(
+        args.workbook,
+        sheet_name=args.sheet,
+        row_numbers=selected_row_numbers(args),
+        class_review=class_review,
+        use_api=args.use_api,
+        model=args.model,
+    )
+
+    app_specs = build_app_specs(
+        wecom_title_re=args.wecom_title_re,
+        whatsapp_title_re=args.whatsapp_title_re,
+    )
+
+    batch_mode = len(jobs) > 1
+    processed = 0
+    skipped = 0
+    for index, job in enumerate(jobs, start=1):
+        if batch_mode:
+            print(f"Batch item {index}/{len(jobs)}")
+        if run_job(job, args=args, app_specs=app_specs, batch_mode=batch_mode):
+            processed += 1
+        else:
+            skipped += 1
+
+    if batch_mode:
+        print("=" * 72)
+        print(f"Batch complete. Processed: {processed}. Skipped: {skipped}. Sent: 0.")
 
 
 if __name__ == "__main__":
