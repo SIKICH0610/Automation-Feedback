@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
+import sys
 import time
 from typing import Any
+from urllib.parse import quote
 
 from openpyxl import load_workbook
 
@@ -22,8 +26,21 @@ from feedback_generator import (
 from openai_api import DEFAULT_OPENAI_MODEL
 
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
+
 DEFAULT_WECOM_TITLE_RE = r".*(WeCom|企业微信|WXWork).*"
-DEFAULT_WHATSAPP_TITLE_RE = r".*(WhatsApp).*"
+DEFAULT_WHATSAPP_TITLE_RE = r".*(WhatsApp|WhatsApp Web).*"
+STATUS_COLUMN = "Send Status"
+ERROR_COLUMN = "Send Error"
+LAST_ATTEMPT_COLUMN = "Last Attempt"
+PREFERRED_CHANNEL_COLUMN = "Preferred Channel"
+WHATSAPP_PHONE_COLUMN = "WhatsApp Phone"
+WHATSAPP_SEARCH_KEY_COLUMN = "WhatsApp Search Key"
+WHATSAPP_TARGET_TYPE_COLUMN = "WhatsApp Target Type"
 
 
 @dataclass
@@ -60,7 +77,23 @@ class PasteJob:
     channel: str
     search_key: str
     expected_chat_name: str
+    whatsapp_phone: str
+    whatsapp_target_type: str
     feedback: str
+
+
+@dataclass
+class JobResult:
+    status: str
+    pasted: bool = False
+    error: str = ""
+
+
+@dataclass
+class JobLoadError:
+    row_number: int
+    status: str
+    error: str
 
 
 def build_app_specs(
@@ -89,16 +122,16 @@ def build_app_specs(
         ),
         "whatsapp": DesktopAppSpec(
             key="whatsapp",
-            display_name="WhatsApp",
+            display_name="WhatsApp / WhatsApp Web",
             title_re=whatsapp_title_re,
-            process_names=("WhatsApp.exe",),
+            process_names=("WhatsApp.exe", "chrome.exe", "msedge.exe", "brave.exe", "firefox.exe"),
             env_path_var="WHATSAPP_EXE",
             exe_names=("WhatsApp.exe",),
             common_paths=(
                 rf"{local_app_data}\WhatsApp\WhatsApp.exe",
                 rf"{program_files}\WindowsApps\WhatsApp.exe",
             ),
-            uri="whatsapp:",
+            uri="https://web.whatsapp.com/",
         ),
     }
 
@@ -132,15 +165,35 @@ def process_is_running(process_names: tuple[str, ...]) -> bool:
 
 
 def app_window_found(title_re: str) -> bool:
+    return find_window_by_title_re(title_re) is not None
+
+
+def find_window_by_title_re(title_re: str) -> Any | None:
     try:
         from pywinauto import Desktop
     except Exception:
-        return False
+        return None
+
+    desktop = Desktop(backend="uia")
+    pattern = re.compile(title_re)
+    try:
+        for window in desktop.windows():
+            try:
+                title = window.window_text().strip()
+            except Exception:
+                continue
+            if title and pattern.search(title):
+                return window
+    except Exception:
+        pass
 
     try:
-        return Desktop(backend="uia").window(title_re=title_re).exists(timeout=1)
+        window = desktop.window(title_re=title_re)
+        if window.exists(timeout=1):
+            return window
     except Exception:
-        return False
+        return None
+    return None
 
 
 def app_status(spec: DesktopAppSpec) -> DesktopAppStatus:
@@ -249,15 +302,65 @@ def print_app_status(status: DesktopAppStatus) -> None:
         print(f"  launch command accepted: {'yes' if status.launched else 'no'}")
 
 
+def print_matching_window_titles(title_re: str) -> None:
+    try:
+        from pywinauto import Desktop
+    except Exception as exc:
+        print(f"Could not inspect windows: {type(exc).__name__}: {exc}")
+        return
+
+    pattern = re.compile(title_re)
+    found = False
+    for window in Desktop(backend="uia").windows():
+        try:
+            title = window.window_text().strip()
+        except Exception:
+            continue
+        if title and pattern.search(title):
+            found = True
+            print(f"Matched window title: {title}")
+
+    if not found:
+        print(f"No top-level windows matched: {title_re}")
+
+
 def value_for(student: StudentRow, column_name: str) -> str:
     return str(student.values.get(column_name) or "").strip()
 
 
+def normalize_channel(value: str) -> str:
+    text = value.strip().lower()
+    if text in {"wechat", "wecom", "wxwork", "企业微信"}:
+        return "wecom"
+    if text in {"whatsapp", "whatapp", "wa"}:
+        return "whatsapp"
+    return ""
+
+
 def choose_channel(student: StudentRow) -> str:
+    configured_channel = normalize_channel(value_for(student, PREFERRED_CHANNEL_COLUMN))
+    if configured_channel:
+        return configured_channel
+
     language = value_for(student, "Parent Language").lower()
     if language.startswith("chinese"):
         return "wecom"
     return "whatsapp"
+
+
+def normalize_whatsapp_phone(phone: str) -> str:
+    return "".join(character for character in phone if character.isdigit())
+
+
+def whatsapp_target_type(student: StudentRow) -> str:
+    configured_type = value_for(student, WHATSAPP_TARGET_TYPE_COLUMN).strip().lower()
+    if configured_type in {"phone", "direct", "direct_phone"}:
+        return "phone"
+    if configured_type in {"group", "group_search", "search"}:
+        return "group_search"
+    if value_for(student, WHATSAPP_PHONE_COLUMN):
+        return "phone"
+    return "group_search"
 
 
 def build_expected_chat_name(student: StudentRow, uid: str) -> str:
@@ -269,8 +372,66 @@ def build_expected_chat_name(student: StudentRow, uid: str) -> str:
 
 def build_search_key(student: StudentRow, channel: str, uid: str) -> str:
     if channel == "whatsapp":
-        return value_for(student, "WhatsApp Phone") or value_for(student, "Phone") or uid
+        return value_for(student, WHATSAPP_SEARCH_KEY_COLUMN) or uid
     return uid
+
+
+def clear_clipboard() -> None:
+    try:
+        import pyperclip
+
+        pyperclip.copy("")
+    except Exception:
+        pass
+
+
+def timestamp() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def ensure_status_columns(workbook_path: Path, sheet_name: str) -> None:
+    workbook = load_workbook(workbook_path)
+    if sheet_name not in workbook.sheetnames:
+        workbook.close()
+        return
+
+    worksheet = workbook[sheet_name]
+    headers = header_values(worksheet)
+    changed = False
+    for column_name in (STATUS_COLUMN, ERROR_COLUMN, LAST_ATTEMPT_COLUMN):
+        if column_name not in headers:
+            worksheet.cell(1, worksheet.max_column + 1).value = column_name
+            headers.append(column_name)
+            changed = True
+
+    if changed:
+        workbook.save(workbook_path)
+    workbook.close()
+
+
+def set_status_value(worksheet: Any, headers: list[Any], row_number: int, column_name: str, value: str) -> None:
+    if column_name not in headers:
+        worksheet.cell(1, len(headers) + 1).value = column_name
+        headers.append(column_name)
+    worksheet.cell(row_number, headers.index(column_name) + 1).value = value
+
+
+def write_job_status(
+    workbook_path: Path,
+    sheet_name: str,
+    row_number: int,
+    *,
+    status: str,
+    error: str = "",
+) -> None:
+    workbook = load_workbook(workbook_path)
+    worksheet = workbook[sheet_name]
+    headers = header_values(worksheet)
+    set_status_value(worksheet, headers, row_number, STATUS_COLUMN, status)
+    set_status_value(worksheet, headers, row_number, ERROR_COLUMN, error)
+    set_status_value(worksheet, headers, row_number, LAST_ATTEMPT_COLUMN, timestamp())
+    workbook.save(workbook_path)
+    workbook.close()
 
 
 def feedback_for_student(
@@ -307,10 +468,17 @@ def build_paste_job(
         raise ValueError(f"Row {student.excel_row} does not have a uid.")
 
     channel = choose_channel(student)
+    phone = normalize_whatsapp_phone(value_for(student, WHATSAPP_PHONE_COLUMN))
+    target_type = whatsapp_target_type(student)
 
     group_chat_enabled = value_for(student, "Group Chat").lower()
     if channel == "wecom" and group_chat_enabled in {"false", "no", "0"}:
         raise ValueError(f"Row {student.excel_row} is not marked as using a group chat.")
+
+    if channel == "whatsapp" and target_type == "phone" and not phone:
+        raise ValueError(
+            f"Row {student.excel_row} uses WhatsApp phone mode but does not have {WHATSAPP_PHONE_COLUMN!r}."
+        )
 
     return PasteJob(
         excel_row=student.excel_row,
@@ -320,6 +488,8 @@ def build_paste_job(
         channel=channel,
         search_key=build_search_key(student, channel, uid),
         expected_chat_name=build_expected_chat_name(student, uid),
+        whatsapp_phone=phone,
+        whatsapp_target_type=target_type,
         feedback=feedback_for_student(
             student,
             class_review=class_review,
@@ -372,7 +542,7 @@ def load_jobs(
     class_review: str,
     use_api: bool,
     model: str,
-) -> list[PasteJob]:
+) -> list[PasteJob | JobLoadError]:
     workbook = load_workbook(workbook_path, read_only=True)
     if sheet_name not in workbook.sheetnames:
         available = ", ".join(workbook.sheetnames)
@@ -380,20 +550,32 @@ def load_jobs(
 
     worksheet = workbook[sheet_name]
     headers = header_values(worksheet)
-    jobs: list[PasteJob] = []
+    jobs: list[PasteJob | JobLoadError] = []
     for row_number in row_numbers:
         student = student_from_worksheet(worksheet, headers, row_number)
         if not student:
-            raise ValueError(f"Row {row_number} does not look like a student row.")
-
-        jobs.append(
-            build_paste_job(
-                student,
-                class_review=class_review,
-                use_api=use_api,
-                model=model,
+            jobs.append(
+                JobLoadError(
+                    row_number=row_number,
+                    status="needs_review",
+                    error=f"Row {row_number} does not look like a student row.",
+                )
             )
-        )
+            continue
+
+        try:
+            jobs.append(
+                build_paste_job(
+                    student,
+                    class_review=class_review,
+                    use_api=use_api,
+                    model=model,
+                )
+            )
+        except ValueError as exc:
+            status = "skipped_absent" if "absent" in str(exc).lower() else "needs_review"
+            jobs.append(JobLoadError(row_number=row_number, status=status, error=str(exc)))
+
     workbook.close()
     return jobs
 
@@ -534,13 +716,56 @@ class WeComPasteRobot:
         text = self.visible_text().lower()
         return "search for mobile" in text or "global search" in text or "groups chats" in text
 
+    def search_input_element(self, search_key: str) -> Any | None:
+        window = self.focus_window()
+        for element in window.descendants():
+            try:
+                control_type = str(element.element_info.control_type or "")
+                class_name = str(element.element_info.class_name or "")
+                text = element.window_text().strip()
+            except Exception:
+                continue
+
+            is_edit = control_type == "Edit" or "Edit" in class_name
+            if is_edit and text == search_key:
+                return element
+        return None
+
+    def search_input_contains(self, search_key: str) -> bool:
+        return self.search_input_element(search_key) is not None
+
+    def search_is_active(self, job: PasteJob) -> bool:
+        return self.search_overlay_visible() or self.search_input_contains(job.search_key)
+
+    def clear_search_state(self, job: PasteJob) -> None:
+        try:
+            search_input = self.search_input_element(job.search_key)
+            if search_input is not None:
+                try:
+                    search_input.set_focus()
+                    time.sleep(0.1)
+                except Exception:
+                    pass
+            else:
+                self.focus_window()
+                self.send_keys(self.search_shortcut)
+                time.sleep(0.2)
+            self.send_keys("^a")
+            time.sleep(0.05)
+            self.send_keys("{BACKSPACE}")
+            time.sleep(0.1)
+            self.send_keys("{ESC}")
+            time.sleep(self.settle_seconds)
+        except Exception:
+            pass
+
     def open_best_result_with_uia(self, job: PasteJob) -> bool:
         for _, element, text in self.search_result_candidates(job):
             print(f"Trying UI Automation result: {text[:80]}")
             try:
                 element.invoke()
                 time.sleep(self.settle_seconds)
-                if not self.search_overlay_visible():
+                if not self.search_is_active(job):
                     return True
             except Exception:
                 pass
@@ -553,30 +778,6 @@ class WeComPasteRobot:
         self.send_keys("{ENTER}")
         time.sleep(self.settle_seconds)
 
-    def click_best_search_result(self, job: PasteJob) -> bool:
-        from pywinauto import mouse
-
-        window = self.focus_window()
-        window_rectangle = window.rectangle()
-        candidates = self.search_result_candidates(job)
-        if not candidates:
-            return False
-
-        _, element, text = candidates[0]
-        rectangle = element.rectangle()
-
-        click_x = min(
-            max(rectangle.left + 45, window_rectangle.left + 130),
-            window_rectangle.left + 360,
-        )
-        click_y = int((rectangle.top + rectangle.bottom) / 2)
-        if "group chat name" in text.lower():
-            click_y -= 18
-        print(f"Coordinate fallback clicking WeCom result near: {text[:80]}")
-        mouse.double_click(button="left", coords=(int(click_x), click_y))
-        time.sleep(self.settle_seconds)
-        return True
-
     def print_search_result_candidates(self, job: PasteJob) -> None:
         self.search_chat(job.search_key)
         candidates = self.search_result_candidates(job)
@@ -585,12 +786,7 @@ class WeComPasteRobot:
             return
         print("Safe WeCom search candidates:")
         for score, element, text in candidates[:10]:
-            try:
-                rectangle = element.rectangle()
-                location = f"left={rectangle.left}, top={rectangle.top}, width={rectangle.width()}, height={rectangle.height()}"
-            except Exception:
-                location = "location unavailable"
-            print(f"- score={score}; {location}; text={text[:120]}")
+            print(f"- score={score}; text={text[:120]}")
 
     def open_chat_from_search(self, job: PasteJob, *, open_strategy: str = "enter-first") -> None:
         self.search_chat(job.search_key)
@@ -604,29 +800,30 @@ class WeComPasteRobot:
         if open_strategy == "enter":
             self.send_keys("{ENTER}")
             time.sleep(self.settle_seconds)
+            if self.search_is_active(job):
+                self.clear_search_state(job)
+                raise LookupError(f"WeCom group chat was not found for uid {job.uid}.")
             return
 
         if open_strategy == "keyboard":
             self.open_first_result_with_keyboard()
-        elif open_strategy == "coordinate-click":
-            if not self.click_best_search_result(job):
-                raise RuntimeError("Could not find a coordinate-click search result.")
         elif open_strategy == "ui-control":
             if not self.open_best_result_with_uia(job):
-                print("UI Automation did not open a result; using filtered result-row click fallback.")
-                if not self.click_best_search_result(job):
-                    raise RuntimeError("Could not find a safe WeCom group-chat search result.")
+                self.clear_search_state(job)
+                raise LookupError(f"WeCom group chat was not found for uid {job.uid}.")
         else:
             print("Opening first WeCom search result with Enter.")
             self.send_keys("{ENTER}")
             time.sleep(self.settle_seconds)
-            if self.search_overlay_visible():
+            if self.search_is_active(job):
                 print("Enter did not open the result; using UI Automation fallback.")
-                if not self.open_best_result_with_uia(job) and not self.click_best_search_result(job):
-                    raise RuntimeError("Could not open a safe WeCom group-chat search result.")
+                if not self.open_best_result_with_uia(job):
+                    self.clear_search_state(job)
+                    raise LookupError(f"WeCom group chat was not found for uid {job.uid}.")
 
-        if self.search_overlay_visible():
-            self.send_keys("{ESC}")
+        if self.search_is_active(job):
+            self.clear_search_state(job)
+            raise LookupError(f"WeCom group chat was not found for uid {job.uid}.")
         time.sleep(self.settle_seconds)
 
     def verify_chat(self, job: PasteJob) -> tuple[bool, str]:
@@ -674,30 +871,12 @@ class WeComPasteRobot:
             _, element = max(candidates, key=lambda candidate: candidate[0])
             try:
                 element.set_focus()
-            except Exception:
-                pass
-            try:
-                element.click_input()
                 time.sleep(0.2)
                 return True
             except Exception:
                 pass
 
-        try:
-            from pywinauto import mouse
-
-            rectangle = window.rectangle()
-            mouse.click(
-                button="left",
-                coords=(
-                    int((rectangle.left + rectangle.right) / 2),
-                    int(rectangle.bottom - 95),
-                ),
-            )
-            time.sleep(0.2)
-            return True
-        except Exception:
-            return False
+        return False
 
     def paste_feedback(self, feedback: str) -> None:
         try:
@@ -706,10 +885,188 @@ class WeComPasteRobot:
             raise RuntimeError("Install clipboard dependency first: python -m pip install pyperclip") from exc
 
         if not self.focus_message_input():
-            raise RuntimeError("Could not focus the WeCom message input box.")
+            print("Could not focus the WeCom message input box by UI Automation; pasting directly into the active WeCom chat.")
+            self.focus_window()
 
         pyperclip.copy(feedback)
         self.send_keys("^v")
+        time.sleep(0.8)
+
+
+class WhatsAppPasteRobot:
+    def __init__(
+        self,
+        *,
+        title_re: str = DEFAULT_WHATSAPP_TITLE_RE,
+        search_shortcut: str = "^f",
+        settle_seconds: float = 1.0,
+    ) -> None:
+        try:
+            from pywinauto import Desktop
+            from pywinauto.keyboard import send_keys
+        except ImportError as exc:
+            raise RuntimeError(
+                "Install desktop automation dependencies first: "
+                "python -m pip install pywinauto pyperclip"
+            ) from exc
+
+        self.desktop = Desktop(backend="uia")
+        self.send_keys = send_keys
+        self.title_re = title_re
+        self.search_shortcut = search_shortcut
+        self.settle_seconds = settle_seconds
+        self.window: Any | None = None
+
+    def focus_window(self) -> Any:
+        if self.window is not None:
+            try:
+                if self.window.exists(timeout=0.5):
+                    self.window.set_focus()
+                    return self.window
+            except Exception:
+                self.window = None
+
+        window = find_window_by_title_re(self.title_re)
+        if window is None:
+            raise RuntimeError(f"Could not find WhatsApp window with title pattern: {self.title_re}")
+        window.set_focus()
+        self.window = window
+        return window
+
+    def visible_text(self) -> str:
+        window = self.focus_window()
+        texts: list[str] = []
+        try:
+            title = window.window_text().strip()
+        except Exception:
+            title = ""
+        if title:
+            texts.append(title)
+        for element in window.descendants():
+            try:
+                text = element.window_text().strip()
+            except Exception:
+                continue
+            if text:
+                texts.append(text)
+        return "\n".join(texts)
+
+    def open_phone_url(self, job: PasteJob) -> None:
+        if not job.whatsapp_phone:
+            raise RuntimeError("WhatsApp phone mode needs a WhatsApp Phone value.")
+
+        url = f"https://wa.me/{job.whatsapp_phone}?text={quote(job.feedback)}"
+        os.startfile(url)  # type: ignore[attr-defined]
+        time.sleep(3)
+
+    def search_chat(self, search_key: str) -> None:
+        try:
+            import pyperclip
+        except ImportError as exc:
+            raise RuntimeError("Install clipboard dependency first: python -m pip install pyperclip") from exc
+
+        self.focus_window()
+        self.send_keys("{ESC}")
+        time.sleep(0.1)
+        pyperclip.copy(search_key)
+        self.send_keys(self.search_shortcut)
+        time.sleep(0.3)
+        self.send_keys("^a")
+        self.send_keys("^v")
+        time.sleep(self.settle_seconds)
+
+    def search_input_element(self, search_key: str) -> Any | None:
+        window = self.focus_window()
+        for element in window.descendants():
+            try:
+                control_type = str(element.element_info.control_type or "")
+                class_name = str(element.element_info.class_name or "")
+                text = element.window_text().strip()
+            except Exception:
+                continue
+
+            is_edit = control_type == "Edit" or "Edit" in class_name
+            if is_edit and text == search_key:
+                return element
+        return None
+
+    def search_input_contains(self, search_key: str) -> bool:
+        return self.search_input_element(search_key) is not None
+
+    def element_has_keyboard_focus(self, element: Any) -> bool:
+        try:
+            return bool(element.has_keyboard_focus())
+        except Exception:
+            pass
+        try:
+            return bool(element.element_info.has_keyboard_focus)
+        except Exception:
+            return False
+
+    def search_is_active(self, search_key: str) -> bool:
+        search_input = self.search_input_element(search_key)
+        return search_input is not None and self.element_has_keyboard_focus(search_input)
+
+    def clear_search_state(self, search_key: str) -> None:
+        try:
+            self.focus_window()
+            self.send_keys(self.search_shortcut)
+            time.sleep(0.2)
+            self.send_keys("^a")
+            time.sleep(0.05)
+            self.send_keys("{BACKSPACE}")
+            time.sleep(0.1)
+            self.send_keys("{ESC}")
+            time.sleep(self.settle_seconds)
+        except Exception:
+            pass
+
+    def open_chat_from_search(self, search_key: str) -> None:
+        self.search_chat(search_key)
+        print("Opening WhatsApp search result with Enter.")
+        self.send_keys("{ENTER}")
+        time.sleep(self.settle_seconds)
+        if self.search_is_active(search_key):
+            self.clear_search_state(search_key)
+            raise LookupError(f"WhatsApp chat was not found for search key {search_key!r}.")
+
+    def close_search_overlay(self) -> None:
+        try:
+            self.send_keys("{ESC}")
+            time.sleep(0.2)
+        except Exception:
+            pass
+
+    def verify_chat(self, job: PasteJob) -> tuple[bool, str]:
+        text = self.visible_text()
+        uid_ok = bool(job.uid and job.uid in text)
+        search_ok = bool(job.search_key and job.search_key in text)
+        name_parts = [part for part in job.student_name.split() if part]
+        name_ok = any(part in text for part in name_parts)
+
+        if uid_ok or search_ok:
+            return True, "verified_search_key"
+        if name_ok:
+            return True, "verified_name_only"
+        return False, "whatsapp_target_not_visible"
+
+    def paste_feedback(self, feedback: str) -> None:
+        try:
+            import pyperclip
+        except ImportError as exc:
+            raise RuntimeError("Install clipboard dependency first: python -m pip install pyperclip") from exc
+
+        for attempt in range(3):
+            pyperclip.copy(feedback)
+            time.sleep(0.2)
+            if pyperclip.paste() == feedback:
+                print(f"Clipboard loaded with feedback ({len(feedback)} characters).")
+                break
+            if attempt == 2:
+                raise RuntimeError("Could not copy feedback text into the clipboard.")
+
+        self.send_keys("^v")
+        time.sleep(1.5)
 
 
 def print_job(job: PasteJob) -> None:
@@ -721,6 +1078,9 @@ def print_job(job: PasteJob) -> None:
     print(f"Channel: {job.channel}")
     print(f"Search key: {job.search_key}")
     print(f"Expected chat name: {job.expected_chat_name}")
+    if job.channel == "whatsapp":
+        print(f"WhatsApp target type: {job.whatsapp_target_type}")
+        print(f"WhatsApp phone: {job.whatsapp_phone or '(blank)'}")
     print()
     print(job.feedback)
     print()
@@ -737,14 +1097,15 @@ def configured_exe_for_app(args: argparse.Namespace, app_key: str) -> Path | Non
 def print_readiness(job: PasteJob, status: DesktopAppStatus) -> None:
     print_app_status(status)
     ready = status.dependency_ok and status.window_found
-    print(f"Safe to run paste-only for this row: {'yes' if ready and job.channel == 'wecom' else 'no'}")
-    if job.channel != "wecom":
-        print(f"Paste automation for {job.channel!r} is not implemented yet.")
+    if job.channel == "whatsapp" and job.whatsapp_target_type == "phone":
+        print("Safe to run paste-only for this row: yes, phone URL mode does not need app window verification")
+    else:
+        print(f"Safe to run paste-only for this row: {'yes' if ready else 'no'}")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Supervised paste helper for one WeCom / 企业微信 feedback message. It never sends."
+        description="Supervised paste helper for WeCom / 企业微信 and WhatsApp feedback messages. It never sends."
     )
     parser.add_argument("--workbook", type=Path, default=DEFAULT_WORKBOOK)
     parser.add_argument("--sheet", default=DEFAULT_SHEET)
@@ -783,10 +1144,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Search WeCom / 企业微信 and print safe candidate UI elements without opening, pasting, or sending.",
     )
     parser.add_argument(
+        "--debug-window-titles",
+        action="store_true",
+        help="Print app window titles that match the selected channel without pasting.",
+    )
+    parser.add_argument(
         "--mode",
         choices=["dry-run", "paste-only"],
         default="dry-run",
-        help="dry-run prints the job only; paste-only searches WeCom, verifies, and pastes without sending.",
+        help="dry-run prints the job only; paste-only searches the selected app, verifies when possible, and pastes without sending.",
     )
     parser.add_argument(
         "--no-auto-open",
@@ -796,22 +1162,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--auto-open-search-result",
         action="store_true",
-        help="After searching WeCom / 企业微信, press Enter only and do not use fallback strategies.",
+        help="After searching WeCom / 企业微信, press Enter only.",
     )
     parser.add_argument(
         "--ui-control-result-open",
         action="store_true",
-        help="After searching WeCom / 企业微信, use UI Automation before fallback strategies.",
+        help="After searching WeCom / 企业微信, open a matching result with UI Automation.",
     )
     parser.add_argument(
         "--keyboard-result-open",
         action="store_true",
         help="After searching WeCom / 企业微信, use Down then Enter to open the first result.",
-    )
-    parser.add_argument(
-        "--coordinate-result-click",
-        action="store_true",
-        help="Fallback only: click the best matching result by calculated coordinates.",
     )
     parser.add_argument(
         "--manual-result-click",
@@ -828,6 +1189,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--wecom-exe", type=Path, help="Optional explicit path to WXWork.exe / WeCom.exe.")
     parser.add_argument("--whatsapp-exe", type=Path, help="Optional explicit path to WhatsApp.exe.")
     parser.add_argument("--search-shortcut", default="^f")
+    parser.add_argument(
+        "--whatsapp-search-shortcut",
+        default="^f",
+        help="Keyboard shortcut used to open WhatsApp search. Default is Ctrl+F.",
+    )
+    parser.add_argument(
+        "--no-status-write",
+        action="store_true",
+        help="Do not write Send Status, Send Error, or Last Attempt back to the workbook.",
+    )
     return parser
 
 
@@ -840,9 +1211,117 @@ def open_strategy_from_args(args: argparse.Namespace) -> str:
         return "ui-control"
     if args.keyboard_result_open:
         return "keyboard"
-    if args.coordinate_result_click:
-        return "coordinate-click"
     return "enter-first"
+
+
+def ensure_desktop_ready(
+    app_spec: DesktopAppSpec,
+    *,
+    app_exe: Path | None,
+    no_auto_open: bool,
+) -> DesktopAppStatus:
+    status = ensure_app_available(
+        app_spec,
+        configured_path=app_exe,
+        open_if_missing=not no_auto_open,
+    )
+    print_app_status(status)
+    if not status.dependency_ok:
+        raise RuntimeError(
+            "Desktop automation dependencies are not available. "
+            "Run: python -m pip install -r requirements.txt"
+        )
+    if not status.window_found:
+        raise RuntimeError("Needed app window is not available.")
+    return status
+
+
+def run_wecom_job(
+    job: PasteJob,
+    *,
+    args: argparse.Namespace,
+    app_spec: DesktopAppSpec,
+    app_exe: Path | None,
+) -> JobResult:
+    ensure_desktop_ready(app_spec, app_exe=app_exe, no_auto_open=args.no_auto_open)
+    robot = WeComPasteRobot(
+        title_re=args.wecom_title_re,
+        search_shortcut=args.search_shortcut,
+    )
+
+    if args.debug_search_results:
+        robot.print_search_result_candidates(job)
+        return JobResult(status="checked")
+
+    try:
+        robot.open_chat_from_search(
+            job,
+            open_strategy=open_strategy_from_args(args),
+        )
+    except Exception:
+        robot.clear_search_state(job)
+        raise
+
+    if robot.search_is_active(job):
+        robot.clear_search_state(job)
+        raise LookupError(f"WeCom group chat was not found for uid {job.uid}.")
+
+    verified, reason = robot.verify_chat(job)
+    print(f"Verification: {reason}")
+    if not verified:
+        robot.print_visible_text_debug()
+        if args.require_verification:
+            raise LookupError("WeCom chat could not be verified.")
+        print("WARNING: Could not verify the chat automatically. Continuing because paste-only does not send.")
+
+    robot.paste_feedback(job.feedback)
+    robot.clear_search_state(job)
+    print("Cleared WeCom search box for the next row.")
+    return JobResult(status="pasted", pasted=True)
+
+
+def run_whatsapp_job(
+    job: PasteJob,
+    *,
+    args: argparse.Namespace,
+    app_spec: DesktopAppSpec,
+    app_exe: Path | None,
+) -> JobResult:
+    if job.whatsapp_target_type == "phone":
+        if not job.whatsapp_phone:
+            raise LookupError("WhatsApp phone mode needs a WhatsApp Phone value.")
+        url = f"https://wa.me/{job.whatsapp_phone}?text={quote(job.feedback)}"
+        os.startfile(url)  # type: ignore[attr-defined]
+        time.sleep(3)
+        return JobResult(status="pasted", pasted=True)
+
+    if not job.search_key:
+        raise LookupError("WhatsApp group_search needs WhatsApp Search Key or uid.")
+
+    ensure_desktop_ready(app_spec, app_exe=app_exe, no_auto_open=args.no_auto_open)
+    robot = WhatsAppPasteRobot(
+        title_re=args.whatsapp_title_re,
+        search_shortcut=args.whatsapp_search_shortcut,
+    )
+    try:
+        robot.open_chat_from_search(job.search_key)
+    except Exception:
+        robot.clear_search_state(job.search_key)
+        raise
+
+    robot.paste_feedback(job.feedback)
+
+    verified, reason = robot.verify_chat(job)
+    print(f"Verification: {reason}")
+    if not verified:
+        if args.require_verification:
+            raise LookupError("WhatsApp chat could not be verified.")
+        print("WARNING: Could not verify the WhatsApp chat automatically. Continuing because paste-only does not send.")
+
+    robot.clear_search_state(job.search_key)
+    print("Cleared WhatsApp search box for the next row.")
+
+    return JobResult(status="pasted", pasted=True)
 
 
 def run_job(
@@ -851,11 +1330,11 @@ def run_job(
     args: argparse.Namespace,
     app_specs: dict[str, DesktopAppSpec],
     batch_mode: bool,
-) -> bool:
+) -> JobResult:
     print_job(job)
 
     if job.channel not in app_specs:
-        raise ValueError(f"No desktop app setup is defined for channel {job.channel!r}.")
+        return JobResult(status="needs_review", error=f"No desktop app setup is defined for channel {job.channel!r}.")
 
     app_spec = app_specs[job.channel]
     app_exe = configured_exe_for_app(args, job.channel)
@@ -863,7 +1342,11 @@ def run_job(
     if args.status:
         status = app_status(app_spec)
         print_readiness(job, status)
-        return status.dependency_ok and status.window_found and job.channel == "wecom"
+        return JobResult(status="checked")
+
+    if args.debug_window_titles:
+        print_matching_window_titles(app_spec.title_re)
+        return JobResult(status="checked")
 
     if args.open_app:
         status = ensure_app_available(
@@ -873,57 +1356,33 @@ def run_job(
         )
         print_readiness(job, status)
         if args.mode == "dry-run":
-            return status.dependency_ok and status.window_found and job.channel == "wecom"
+            return JobResult(status="checked")
 
     if args.mode == "dry-run" and not args.debug_search_results:
         print("Dry run only. Nothing was pasted or sent.")
-        return True
+        return JobResult(status="dry_run")
 
-    if job.channel != "wecom":
-        message = f"Skipping row {job.excel_row}: paste automation for {job.channel!r} is not implemented yet."
-        if batch_mode:
-            print(message)
-            return False
-        raise RuntimeError("Only WeCom paste-only is implemented right now.")
+    clear_clipboard()
+    try:
+        if job.channel == "wecom":
+            result = run_wecom_job(job, args=args, app_spec=app_spec, app_exe=app_exe)
+        elif job.channel == "whatsapp":
+            result = run_whatsapp_job(job, args=args, app_spec=app_spec, app_exe=app_exe)
+        else:
+            result = JobResult(status="needs_review", error=f"Unsupported channel {job.channel!r}.")
+    except LookupError as exc:
+        result = JobResult(status="needs_review", error=str(exc))
+    except Exception as exc:
+        result = JobResult(status="failed", error=f"{type(exc).__name__}: {exc}")
+    finally:
+        time.sleep(0.2)
+        clear_clipboard()
 
-    status = ensure_app_available(
-        app_spec,
-        configured_path=app_exe,
-        open_if_missing=not args.no_auto_open,
-    )
-    print_app_status(status)
-    if not status.dependency_ok:
-        raise RuntimeError(
-            "Stopped before paste because desktop automation dependencies are not available. "
-            "Run: py -3.11 -m pip install -r requirements.txt"
-        )
-    if not status.window_found:
-        raise RuntimeError("Stopped before paste because the needed app window is not available.")
-
-    robot = WeComPasteRobot(
-        title_re=args.wecom_title_re,
-        search_shortcut=args.search_shortcut,
-    )
-
-    if args.debug_search_results:
-        robot.print_search_result_candidates(job)
-        return True
-
-    robot.open_chat_from_search(
-        job,
-        open_strategy=open_strategy_from_args(args),
-    )
-    verified, reason = robot.verify_chat(job)
-    print(f"Verification: {reason}")
-    if not verified:
-        robot.print_visible_text_debug()
-        if args.require_verification:
-            raise RuntimeError("Stopped before paste because the WeCom chat could not be verified.")
-        print("WARNING: Could not verify the chat automatically. Continuing because paste-only does not send.")
-
-    robot.paste_feedback(job.feedback)
-    print("Pasted only. The script did not send the message.")
-    return True
+    if result.pasted:
+        print("Pasted only. The script did not send the message.")
+    elif result.error:
+        print(f"{result.status}: {result.error}")
+    return result
 
 
 def main() -> None:
@@ -947,19 +1406,65 @@ def main() -> None:
     )
 
     batch_mode = len(jobs) > 1
+    should_write_status = args.mode == "paste-only" and not args.no_status_write
+    if should_write_status:
+        ensure_status_columns(args.workbook, args.sheet)
+
     processed = 0
+    pasted = 0
+    needs_review = 0
     skipped = 0
-    for index, job in enumerate(jobs, start=1):
+    failed = 0
+    for index, item in enumerate(jobs, start=1):
         if batch_mode:
             print(f"Batch item {index}/{len(jobs)}")
-        if run_job(job, args=args, app_specs=app_specs, batch_mode=batch_mode):
-            processed += 1
-        else:
+
+        if isinstance(item, JobLoadError):
+            print("=" * 72)
+            print(f"Row: {item.row_number}")
+            print(f"{item.status}: {item.error}")
+            if should_write_status:
+                write_job_status(
+                    args.workbook,
+                    args.sheet,
+                    item.row_number,
+                    status=item.status,
+                    error=item.error,
+                )
+            if item.status == "skipped_absent":
+                skipped += 1
+            else:
+                needs_review += 1
+            clear_clipboard()
+            continue
+
+        result = run_job(item, args=args, app_specs=app_specs, batch_mode=batch_mode)
+        processed += 1
+        if result.pasted:
+            pasted += 1
+        elif result.status == "needs_review":
+            needs_review += 1
+        elif result.status == "skipped_absent":
             skipped += 1
+        elif result.status == "failed":
+            failed += 1
+
+        if should_write_status and result.status in {"pasted", "needs_review", "skipped_absent", "failed"}:
+            write_job_status(
+                args.workbook,
+                args.sheet,
+                item.excel_row,
+                status=result.status,
+                error=result.error,
+            )
 
     if batch_mode:
         print("=" * 72)
-        print(f"Batch complete. Processed: {processed}. Skipped: {skipped}. Sent: 0.")
+        print(
+            "Batch complete. "
+            f"Processed: {processed}. Pasted: {pasted}. "
+            f"Needs review: {needs_review}. Skipped: {skipped}. Failed: {failed}. Sent: 0."
+        )
 
 
 if __name__ == "__main__":

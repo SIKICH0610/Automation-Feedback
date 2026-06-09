@@ -39,13 +39,20 @@ $env:OPENAI_API_KEY="your_api_key_here"
 
 ## Prepare the workbook
 
-Add the optional `Additional Comment` column to every sheet:
+Add the optional automation helper columns to every sheet:
 
 ```powershell
 python workbook_setup.py
 ```
 
-Use this column for extra notes that should be added to the end of paragraph 2. In API mode, the note is translated when needed.
+This prepares `Additional Comment`, `Preferred Channel`, WhatsApp routing fields, and send audit fields. Use `Additional Comment` for extra notes that should be added to the end of paragraph 2. In API mode, the note is translated when needed.
+
+Routing columns:
+
+- `Preferred Channel`: optional `wecom` or `whatsapp`. Blank uses `Parent Language`: Chinese -> WeCom, non-Chinese -> WhatsApp.
+- `WhatsApp Phone`: parent phone number for direct WhatsApp phone URL mode.
+- `WhatsApp Search Key`: optional group-chat search key. Blank uses `uid`.
+- `WhatsApp Target Type`: optional `phone` or `group_search`. Blank uses `phone` when `WhatsApp Phone` is present, otherwise `group_search`.
 
 ## Create the class review file
 
@@ -158,19 +165,29 @@ Search WeCom by UID, press Enter to open the first relevant result, focus the me
 .\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --mode paste-only
 ```
 
-The paste helper recognizes window titles containing `WeCom`, `企业微信`, or `WXWork` by default. It does not press Enter after pasting. If WeCom / 企业微信 is installed in a custom location, pass `--wecom-exe "C:\path\to\WXWork.exe"` or set `WECOM_EXE`. If Enter cannot open the result on a computer, try `--ui-control-result-open`, `--coordinate-result-click`, or `--manual-result-click`. Add `--require-verification` if you want the script to stop whenever it cannot verify the chat by UI text.
+Paste a mixed batch without sending. Rows route to WeCom or WhatsApp from the workbook; missing contacts are marked `needs_review` and the batch continues:
 
-Paste multiple WeCom rows automatically without sending:
+```powershell
+.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --start-row 2 --end-row 8 --class-review-file class_review.txt --mode paste-only
+```
+
+The paste helper recognizes window titles containing `WeCom`, `企业微信`, or `WXWork` by default. It does not press Enter after pasting, and it does not use calculated screen-position clicks. If WeCom / 企业微信 is installed in a custom location, pass `--wecom-exe "C:\path\to\WXWork.exe"` or set `WECOM_EXE`. If Enter cannot open the result on a computer, try `--ui-control-result-open` or `--manual-result-click`. Add `--require-verification` if you want the script to stop whenever it cannot verify the chat by UI text.
+
+Paste multiple specific rows automatically without sending:
 
 ```powershell
 .\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --rows 3,5 --class-review-file class_review.txt --mode paste-only
 ```
 
-You can also use a row range. Non-WeCom rows are skipped in batch mode:
+You can also use a row range:
 
 ```powershell
 .\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --start-row 3 --end-row 5 --class-review-file class_review.txt --mode paste-only
 ```
+
+The sender writes `Send Status`, `Send Error`, and `Last Attempt` unless `--no-status-write` is passed. Status values include `pasted`, `needs_review`, `skipped_absent`, and `failed`.
+
+For WhatsApp group search, WhatsApp Desktop or an active WhatsApp Web browser tab can be used. If WhatsApp is in a browser tab, make that tab active before running paste-only, or run `--open-app` to open `https://web.whatsapp.com/`.
 
 To inspect which safe WeCom search candidates the script sees:
 
