@@ -4,6 +4,7 @@ import argparse
 import csv
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Any
 
 from openpyxl import load_workbook
@@ -15,6 +16,32 @@ PROJECT_DIR = Path(__file__).resolve().parent
 DEFAULT_WORKBOOK = PROJECT_DIR / "Geo_TTh_Student_Script_fixed_rows_only.xlsx"
 DEFAULT_SHEET = "Geo TTh"
 ADDITIONAL_COMMENT_COLUMN = "Additional Comment"
+
+
+PARENT_COMMENT_STYLE_GUIDE = """
+Write like a real teacher leaving a thoughtful parent update.
+Blend quiz performance, classroom behavior, and next steps into natural paragraphs.
+Do not use label-style sections, checklist wording, or repeated sentence frames.
+Avoid structures like "Regarding the student's performance" or "The main suggestions are".
+When several areas need work, vary the phrasing so it sounds spoken rather than copied from a template.
+Use natural sentence breaks instead of colons or semicolons.
+End with the standard group-chat question sentence.
+""".strip()
+
+ZH_PARENT_COMMENT_STYLE_GUIDE = """
+中文家长反馈要像老师真实写给家长的消息。
+开头可以保留“家长您好”，之后不要反复说“家长”，统一用“您”。
+不要写成“关于某某的课堂表现”或“建议后续关注”这种模板句。
+如果有多个需要改进的地方，第二个及之后可以自然加入“也”，例如“计算细节也需要更加仔细”。
+语气要具体、温和、顺口，像在群里发给家长的说明。
+""".strip()
+
+EN_PARENT_COMMENT_STYLE_GUIDE = """
+English parent feedback should sound like a natural teacher update.
+Do not use report-style labels or repeated template openings.
+Connect the quiz result, class habits, and next step in a smooth paragraph.
+Keep the tone warm, direct, and parent-friendly.
+""".strip()
 
 
 EN_PHRASES = {
@@ -208,6 +235,23 @@ def phrase_for(field: str, value: Any, language: str) -> str | None:
     text = str(value).strip()
     if text == "Not Observed":
         return None
+    custom_phrases = {
+        "Chinese": {
+            ("Note-taking", "Okay"): "笔记还可以更加完整",
+            ("Participation", "Quiet"): "课堂上比较安静",
+            ("Practice Speed & Accuracy", "High"): "练习准确率较高",
+            ("Practice Speed & Accuracy", "Okay"): "练习完成情况还可以继续提升",
+        },
+        "English": {
+            ("Note-taking", "Okay"): "could make class notes more complete",
+            ("Participation", "Quiet"): "was relatively quiet in class",
+            ("Practice Speed & Accuracy", "High"): "showed strong accuracy on practice problems",
+            ("Practice Speed & Accuracy", "Okay"): "can continue improving practice accuracy",
+        },
+    }
+    custom_language = "Chinese" if language.lower().startswith("chinese") else "English"
+    if (phrase := custom_phrases[custom_language].get((field, text))):
+        return phrase
     phrases = ZH_PHRASES if language.lower().startswith("chinese") else EN_PHRASES
     return phrases.get(field, {}).get(text, text)
 
@@ -261,17 +305,29 @@ def personal_feedback_with_gpt(
     remark = str(student.values.get("Remark for Student") or "").strip()
     additional_comment = str(student.values.get(ADDITIONAL_COMMENT_COLUMN) or "").strip()
     homework_text = homework or ""
+    language_style = (
+        ZH_PARENT_COMMENT_STYLE_GUIDE
+        if language.lower().startswith("chinese")
+        else EN_PARENT_COMMENT_STYLE_GUIDE
+    )
 
     prompt = f"""
 You are writing the student-specific part of a parent class update.
 
 Write in {language}.
-Use a warm, natural teacher voice.
+Follow this teacher style guide:
+{PARENT_COMMENT_STYLE_GUIDE}
+
+Language-specific style guide:
+{language_style}
+
 Do not mention "not observed".
 Do not include attendance.
 Do not include the class material paragraph.
-Keep it concise and realistic, like a teacher wrote it after class.
+Do not end with generic thanks or "thank you for your cooperation".
 If Additional Comment is provided, translate it if needed and add it naturally to the end of paragraph 2.
+End with this sentence in Chinese messages: 如果您还有任何问题，可以直接在群里问我，我会尽快回复。
+End with this sentence in English messages: If you have any questions, feel free to ask me directly in the group chat. I will reply as soon as possible.
 
 Output paragraph 2 as the personal comment.
 If homework feedback is provided, add paragraph 3 as homework feedback.
@@ -309,6 +365,47 @@ def class_review_paragraph(class_review: str, is_chinese: bool) -> str:
     )
 
 
+def clean_parent_feedback_text(text: str) -> str:
+    cleaned = text.replace("：", "，").replace(":", ",")
+    cleaned = cleaned.replace("；", "。").replace(";", ".")
+    if cleaned.startswith("家长您好"):
+        prefix = "家长您好"
+        return prefix + cleaned[len(prefix):].replace("家长", "您")
+    return cleaned.replace("家长", "您")
+
+
+def closing_sentence(is_chinese: bool) -> str:
+    if is_chinese:
+        return "如果您还有任何问题，可以直接在群里问我，我会尽快回复。"
+    return "If you have any questions, feel free to ask me directly in the group chat. I will reply as soon as possible."
+
+
+def append_parent_closing(text: str, is_chinese: bool) -> str:
+    closing = closing_sentence(is_chinese)
+    cleaned = text.strip()
+    if closing in cleaned:
+        return cleaned
+    return f"{cleaned}\n\n{closing}"
+
+
+def sentence_join_zh(items: list[str]) -> str:
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    sentences = [items[0]]
+    for item in items[1:]:
+        if "也" in item or item.startswith(("同时", "特别", "可以", "继续")):
+            sentences.append(item)
+        elif "还需要" in item:
+            sentences.append(item.replace("还需要", "也需要", 1))
+        elif "需要" in item:
+            sentences.append(item.replace("需要", "也需要", 1))
+        else:
+            sentences.append(item)
+    return "。".join(sentences)
+
+
 def join_naturally(items: list[str], language: str) -> str:
     if not items:
         return ""
@@ -321,14 +418,177 @@ def join_naturally(items: list[str], language: str) -> str:
     return ", ".join(items[:-1]) + f", and {items[-1]}"
 
 
+def quiz_score_from_remark(remark: str) -> float | None:
+    match = re.search(r"(\d+(?:\.\d+)?)\s*/\s*8", remark)
+    if not match:
+        return None
+    return float(match.group(1))
+
+
+def format_score(score: float) -> str:
+    if score.is_integer():
+        return str(int(score))
+    return str(score).rstrip("0").rstrip(".")
+
+
+def strip_quiz_score_text(remark: str) -> str:
+    text = re.sub(r"quiz\s*1?\s*[，,]?\s*", "", remark, flags=re.IGNORECASE)
+    text = re.sub(r"满分\s*\d+(?:\.\d+)?\s*/\s*8[，,]?", "", text)
+    text = re.sub(r"\d+(?:\.\d+)?\s*/\s*8[，,]?", "", text)
+    return text.strip(" ，,。.")
+
+
+def chinese_quiz_score_sentence(score: float) -> str:
+    score_text = format_score(score)
+    if score < 6.5:
+        return (
+            f"本次 quiz 得分为 {score_text}/8，低于本次班级平均分 6.9/8，"
+            "建议家长最近多关注一下孩子对前半部分知识的掌握情况。"
+        )
+    if score >= 7.5:
+        return f"本次 quiz 得分为 {score_text}/8，整体表现很不错，说明前半部分知识掌握比较扎实。"
+    return f"本次 quiz 得分为 {score_text}/8，整体接近或达到本次班级平均水平。"
+
+
+def english_quiz_score_sentence(score: float) -> str:
+    score_text = format_score(score)
+    if score < 6.5:
+        return (
+            f"The quiz score was {score_text}/8, which is below the class average of 6.9/8. "
+            "It would be helpful to keep a closer eye on the student's current understanding."
+        )
+    if score >= 7.5:
+        return (
+            f"The quiz score was {score_text}/8, which is a strong result and shows solid understanding "
+            "of the first-half topics."
+        )
+    return f"The quiz score was {score_text}/8, which is around the class average."
+
+
+def chinese_observation_sentence(name: str, observations: list[str], language: str) -> str:
+    if not observations:
+        return ""
+    return f"结合课堂表现来看，{name} {join_naturally(observations, language)}。"
+
+
+def english_observation_sentence(name: str, observations: list[str], language: str) -> str:
+    if not observations:
+        return ""
+    return f"During class, {name} {join_naturally(observations, language)}."
+
+
+QUIZ_FOCUS_RULES_ZH = [
+    (("选择题全对",), (), "选择题部分完成得很好"),
+    (("证明严谨", "proof is rig"), (), "证明书写比较严谨"),
+    (("都写了过程",), (), "也能比较完整地写出过程"),
+    (("不太爱写过程", "不喜欢写过程"), (), "做题时需要更主动地写出完整过程"),
+    (("不仔细", "问题", "错"), ("计算",), "计算细节还需要更加仔细"),
+    (("证明不太严谨", "漏步骤"), (), "证明书写需要更严谨，避免漏掉关键步骤"),
+    (("先证明三角形全等",), (), "特别要注意先证明三角形全等，再使用对应边或对应角相等"),
+    (("reason",), (), "证明中的 reason 需要写得更明确"),
+    (("alternate interior angle",), (), "平行线相关证明中要清楚写出 alternate interior angles congruent 等关键理由"),
+    (("三种shape", "special angle"), (), "平行线对应的几种 special angle 图形还需要继续巩固，做题时不要被其他平行线干扰判断"),
+    (("apple watch", "出怪声"), (), "课堂专注和课堂习惯方面还需要您在家里配合提醒"),
+    (("perfect", "8/8"), (), "可以继续保持目前严谨、完整的作答习惯"),
+]
+
+QUIZ_FOCUS_RULES_EN = [
+    (("perfect", "8/8"), (), "maintaining the strong quiz performance"),
+    (("rig", "concise"), ("proof",), "keeping proof writing rigorous and concise"),
+    (("calculation", "compute"), (), "checking calculation accuracy"),
+    (("reason",), (), "stating proof reasons more clearly"),
+    (("process", "steps"), (), "showing complete work and avoiding skipped steps"),
+]
+
+
+def focus_points_from_rules(
+    text: str,
+    rules: list[tuple[tuple[str, ...], tuple[str, ...], str]],
+) -> list[str]:
+    lower = text.lower()
+    points: list[str] = []
+    for any_terms, required_terms, phrase in rules:
+        has_any = any(term.lower() in lower for term in any_terms)
+        has_required = all(term.lower() in lower for term in required_terms)
+        if has_any and has_required:
+            points.append(phrase)
+    return list(dict.fromkeys(points))
+
+
+def chinese_quiz_focus_sentences(remark: str) -> list[str]:
+    return focus_points_from_rules(remark, QUIZ_FOCUS_RULES_ZH)
+
+
+def english_quiz_focus_sentences(remark: str) -> list[str]:
+    return focus_points_from_rules(remark, QUIZ_FOCUS_RULES_EN)
+
+
+def quiz_comment_paragraph(student: StudentRow, observations: list[str], is_chinese: bool) -> str | None:
+    remark = str(student.values.get("Remark for Student") or "").strip()
+    if "quiz" not in remark.lower() and "/8" not in remark:
+        return None
+
+    name = student.first_name or student.full_name
+    score = quiz_score_from_remark(remark)
+    additional_comment = additional_comment_for_local_message(student, is_chinese)
+
+    if is_chinese:
+        sentences: list[str] = []
+        if score is not None:
+            sentences.append(chinese_quiz_score_sentence(score))
+
+        focus = chinese_quiz_focus_sentences(remark)
+        if focus:
+            focus_text = sentence_join_zh(focus)
+            if score is not None and score >= 7.5:
+                sentences.append(f"{name} 这次表现比较扎实，后续可以继续保持，尤其是{focus_text}。")
+            else:
+                sentences.append(f"从这次 quiz 和课堂情况来看，{name} 接下来可以重点关注{focus_text}。")
+        else:
+            cleaned = strip_quiz_score_text(remark)
+            if cleaned:
+                sentences.append(f"从本次课堂记录来看，{name}{cleaned}。")
+
+        if observations:
+            sentences.append(chinese_observation_sentence(name, observations, student.language))
+        if additional_comment:
+            sentences.append(additional_comment + "。")
+        sentences.append("后续可以继续复习前半部分知识，并在计算准确性和证明步骤完整性上多检查。")
+        return "".join(sentences)
+
+    sentences = []
+    if score is not None:
+        sentences.append(english_quiz_score_sentence(score))
+
+    focus = english_quiz_focus_sentences(remark)
+    if focus:
+        focus_text = ", and ".join(focus)
+        sentences.append(f"{name} can build from this by continuing to focus on {focus_text}.")
+    elif remark.isascii():
+        cleaned = strip_quiz_score_text(remark)
+        if cleaned:
+            sentences.append(f"My classroom note for {name} is that {cleaned}.")
+
+    if observations:
+        sentences.append(english_observation_sentence(name, observations, student.language))
+    if additional_comment:
+        sentences.append(additional_comment + ".")
+    sentences.append("Going forward, reviewing the first-half topics while checking calculation details and proof structure carefully will help keep the foundation strong.")
+    return " ".join(sentences)
+
+
 def comment_paragraph(student: StudentRow, observations: list[str], is_chinese: bool) -> str:
     name = student.first_name or student.full_name
     remark = str(student.values.get("Remark for Student") or "").strip()
     additional_comment = additional_comment_for_local_message(student, is_chinese)
 
+    quiz_comment = quiz_comment_paragraph(student, observations, is_chinese)
+    if quiz_comment:
+        return quiz_comment
+
     if is_chinese:
         if remark:
-            base = f"{name}今天课堂表现：{remark}。"
+            base = f"{name}今天课堂中{remark}。"
             if additional_comment:
                 return f"{base}{additional_comment}。"
             return base
@@ -345,15 +605,15 @@ def comment_paragraph(student: StudentRow, observations: list[str], is_chinese: 
 
     if observations:
         base = (
-            f"{name} had a steady class today. I noticed that {name} "
-            f"{join_naturally(observations, student.language)}. The next step is to keep "
-            "building proof logic while checking details carefully."
+            f"{name} had a steady class today and "
+            f"{join_naturally(observations, student.language)}. Continuing to build proof logic "
+            "while checking details carefully will be helpful."
         )
         if additional_comment:
             return f"{base} {additional_comment}."
         return base
     if remark and remark.isascii():
-        base = f"For {name}, my main classroom note is: {remark}"
+        base = f"My classroom note for {name} is that {remark}"
         if additional_comment:
             return f"{base} {additional_comment}."
         return base
@@ -398,12 +658,14 @@ def generate_feedback(
             homework=homework,
             model=model,
         )
-        return "\n\n".join([class_paragraph, personal_section.strip()])
+        feedback = clean_parent_feedback_text("\n\n".join([class_paragraph, personal_section.strip()]))
+        return append_parent_closing(feedback, is_chinese)
 
     paragraphs = [class_paragraph, local_comment]
     if homework:
         paragraphs.append(homework)
-    return "\n\n".join(paragraphs)
+    feedback = clean_parent_feedback_text("\n\n".join(paragraphs))
+    return append_parent_closing(feedback, is_chinese)
 
 
 def write_feedback(
@@ -524,6 +786,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional text file containing the class review paragraph.",
     )
     parser.add_argument(
+        "--class-review-file-zh",
+        type=Path,
+        help="Optional Chinese class review file for Chinese parent messages.",
+    )
+    parser.add_argument(
+        "--class-review-file-en",
+        type=Path,
+        help="Optional English class review file for English parent messages.",
+    )
+    parser.add_argument(
         "--use-api",
         action="store_true",
         help="Use the OpenAI API to polish the parent-facing personal comment.",
@@ -547,6 +819,16 @@ def main() -> None:
     class_review = args.class_review
     if args.class_review_file:
         class_review = args.class_review_file.read_text(encoding="utf-8").strip()
+    class_review_zh = (
+        args.class_review_file_zh.read_text(encoding="utf-8").strip()
+        if args.class_review_file_zh
+        else class_review
+    )
+    class_review_en = (
+        args.class_review_file_en.read_text(encoding="utf-8").strip()
+        if args.class_review_file_en
+        else class_review
+    )
 
     workbook = load_workbook(args.workbook)
     if args.sheet not in workbook.sheetnames:
@@ -594,9 +876,13 @@ def main() -> None:
                         revised_remark,
                     )
 
+        student_class_review = (
+            class_review_zh if student.language.lower().startswith("chinese") else class_review_en
+        )
+
         feedback = generate_feedback(
             student,
-            class_review=class_review,
+            class_review=student_class_review,
             use_api=args.use_api,
             model=args.model,
         )
