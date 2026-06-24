@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import os
 from pathlib import Path
 import re
@@ -75,6 +75,7 @@ class PasteJob:
     student_name: str
     parent_language: str
     channel: str
+    channel_explicit: bool
     search_key: str
     expected_chat_name: str
     whatsapp_phone: str
@@ -440,10 +441,16 @@ def feedback_for_student(
     class_review: str,
     use_api: bool,
     model: str,
+    message_column: str = "Feedback",
 ) -> str:
-    existing_feedback = value_for(student, "Feedback")
+    existing_feedback = value_for(student, message_column)
     if existing_feedback:
         return existing_feedback
+
+    if message_column != "Feedback":
+        raise ValueError(
+            f"Row {student.excel_row} does not have a message in column {message_column!r}."
+        )
 
     feedback = generate_feedback(
         student,
@@ -462,6 +469,7 @@ def build_paste_job(
     class_review: str,
     use_api: bool,
     model: str,
+    message_column: str = "Feedback",
 ) -> PasteJob:
     uid = normalize_uid(student.values.get("uid"))
     if not uid:
@@ -470,10 +478,6 @@ def build_paste_job(
     channel = choose_channel(student)
     phone = normalize_whatsapp_phone(value_for(student, WHATSAPP_PHONE_COLUMN))
     target_type = whatsapp_target_type(student)
-
-    group_chat_enabled = value_for(student, "Group Chat").lower()
-    if channel == "wecom" and group_chat_enabled in {"false", "no", "0"}:
-        raise ValueError(f"Row {student.excel_row} is not marked as using a group chat.")
 
     if channel == "whatsapp" and target_type == "phone" and not phone:
         raise ValueError(
@@ -486,6 +490,7 @@ def build_paste_job(
         student_name=student.full_name,
         parent_language=value_for(student, "Parent Language") or "English",
         channel=channel,
+        channel_explicit=bool(normalize_channel(value_for(student, PREFERRED_CHANNEL_COLUMN))),
         search_key=build_search_key(student, channel, uid),
         expected_chat_name=build_expected_chat_name(student, uid),
         whatsapp_phone=phone,
@@ -495,6 +500,7 @@ def build_paste_job(
             class_review=class_review,
             use_api=use_api,
             model=model,
+            message_column=message_column,
         ),
     )
 
@@ -542,6 +548,7 @@ def load_jobs(
     class_review: str,
     use_api: bool,
     model: str,
+    message_column: str = "Feedback",
 ) -> list[PasteJob | JobLoadError]:
     workbook = load_workbook(workbook_path, read_only=True)
     if sheet_name not in workbook.sheetnames:
@@ -570,6 +577,7 @@ def load_jobs(
                     class_review=class_review,
                     use_api=use_api,
                     model=model,
+                    message_column=message_column,
                 )
             )
         except ValueError as exc:
@@ -1103,7 +1111,11 @@ def print_readiness(job: PasteJob, status: DesktopAppStatus) -> None:
         print(f"Safe to run paste-only for this row: {'yes' if ready else 'no'}")
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(
+    *,
+    default_message_column: str = "Feedback",
+    default_fallback_channel: bool = False,
+) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Supervised paste helper for WeCom / 企业微信 and WhatsApp feedback messages. It never sends."
     )
@@ -1126,6 +1138,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--class-review", default="")
     parser.add_argument("--class-review-file", type=Path)
+    parser.add_argument(
+        "--message-column",
+        default=default_message_column,
+        help="Workbook column containing the exact text to paste. Default is Feedback.",
+    )
+    parser.add_argument(
+        "--fallback-channel",
+        action="store_true",
+        default=default_fallback_channel,
+        help="If an automatically selected channel fails, clear state and try the other app.",
+    )
     parser.add_argument("--use-api", action="store_true")
     parser.add_argument("--model", default=DEFAULT_OPENAI_MODEL)
     parser.add_argument(
@@ -1362,21 +1385,65 @@ def run_job(
         print("Dry run only. Nothing was pasted or sent.")
         return JobResult(status="dry_run")
 
-    clear_clipboard()
-    try:
-        if job.channel == "wecom":
-            result = run_wecom_job(job, args=args, app_spec=app_spec, app_exe=app_exe)
-        elif job.channel == "whatsapp":
-            result = run_whatsapp_job(job, args=args, app_spec=app_spec, app_exe=app_exe)
-        else:
-            result = JobResult(status="needs_review", error=f"Unsupported channel {job.channel!r}.")
-    except LookupError as exc:
-        result = JobResult(status="needs_review", error=str(exc))
-    except Exception as exc:
-        result = JobResult(status="failed", error=f"{type(exc).__name__}: {exc}")
-    finally:
-        time.sleep(0.2)
+    def attempt(current_job: PasteJob) -> JobResult:
+        current_spec = app_specs[current_job.channel]
+        current_exe = configured_exe_for_app(args, current_job.channel)
         clear_clipboard()
+        try:
+            if current_job.channel == "wecom":
+                return run_wecom_job(
+                    current_job,
+                    args=args,
+                    app_spec=current_spec,
+                    app_exe=current_exe,
+                )
+            if current_job.channel == "whatsapp":
+                return run_whatsapp_job(
+                    current_job,
+                    args=args,
+                    app_spec=current_spec,
+                    app_exe=current_exe,
+                )
+            return JobResult(
+                status="needs_review",
+                error=f"Unsupported channel {current_job.channel!r}.",
+            )
+        except LookupError as exc:
+            return JobResult(status="needs_review", error=str(exc))
+        except Exception as exc:
+            return JobResult(status="failed", error=f"{type(exc).__name__}: {exc}")
+        finally:
+            time.sleep(0.2)
+            clear_clipboard()
+
+    result = attempt(job)
+    can_fallback = (
+        args.fallback_channel
+        and not job.channel_explicit
+        and job.whatsapp_target_type != "phone"
+        and not result.pasted
+    )
+    if can_fallback:
+        primary_error = result.error or result.status
+        fallback_channel = "whatsapp" if job.channel == "wecom" else "wecom"
+        print(
+            f"Primary {job.channel} attempt did not paste. "
+            f"Clearing state and trying {fallback_channel}."
+        )
+        fallback_job = replace(
+            job,
+            channel=fallback_channel,
+            search_key=job.uid,
+            whatsapp_phone="",
+            whatsapp_target_type="group_search",
+        )
+        result = attempt(fallback_job)
+        if not result.pasted:
+            fallback_error = result.error or result.status
+            result.error = (
+                f"Primary {job.channel} attempt failed with {primary_error}. "
+                f"Fallback {fallback_channel} attempt failed with {fallback_error}."
+            )
 
     if result.pasted:
         print("Pasted only. The script did not send the message.")
@@ -1385,8 +1452,15 @@ def run_job(
     return result
 
 
-def main() -> None:
-    args = build_parser().parse_args()
+def main(
+    *,
+    default_message_column: str = "Feedback",
+    default_fallback_channel: bool = False,
+) -> None:
+    args = build_parser(
+        default_message_column=default_message_column,
+        default_fallback_channel=default_fallback_channel,
+    ).parse_args()
     class_review = args.class_review
     if args.class_review_file:
         class_review = args.class_review_file.read_text(encoding="utf-8").strip()
@@ -1398,6 +1472,7 @@ def main() -> None:
         class_review=class_review,
         use_api=args.use_api,
         model=args.model,
+        message_column=args.message_column,
     )
 
     app_specs = build_app_specs(
