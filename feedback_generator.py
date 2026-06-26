@@ -728,6 +728,7 @@ def export_review_csv(rows: list[dict[str, str]], output_path: Path) -> None:
         "uid",
         "student",
         "status",
+        "feedback_column",
         "revised_remark",
         "feedback",
     ]
@@ -768,7 +769,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--write",
         action="store_true",
-        help="Write generated text back to the Feedback column. Preview-only by default.",
+        help="Write generated text back to the selected feedback column. Preview-only by default.",
+    )
+    parser.add_argument(
+        "--feedback-column",
+        default="Feedback",
+        help=(
+            "Workbook column to write generated comments into. Examples: "
+            "'Pre-quiz informing', 'Quiz Feedback', 'Second Feeback', or 'Feedback'."
+        ),
     )
     parser.add_argument(
         "--review-csv",
@@ -837,6 +846,8 @@ def main() -> None:
 
     worksheet = workbook[args.sheet]
     headers = [worksheet.cell(1, col).value for col in range(1, worksheet.max_column + 1)]
+    if args.write:
+        find_column(headers, args.feedback_column)
     if args.all:
         students = iter_student_rows(
             worksheet,
@@ -852,6 +863,7 @@ def main() -> None:
     print(f"Sheet: {args.sheet}")
     print(f"Mode: {'all rows' if args.all else 'single row'}")
     print(f"Write feedback: {'yes' if args.write else 'no, preview only'}")
+    print(f"Feedback column: {args.feedback_column}")
     print()
 
     generated = 0
@@ -894,6 +906,7 @@ def main() -> None:
                 "uid": normalize_uid(student.values.get("uid")),
                 "student": student.full_name,
                 "status": "skipped_absent" if feedback is None else "generated",
+                "feedback_column": args.feedback_column,
                 "revised_remark": revised_remark,
                 "feedback": feedback or "",
             }
@@ -905,7 +918,7 @@ def main() -> None:
 
         generated += 1
         if args.write:
-            set_column_value(worksheet, headers, student.excel_row, "Feedback", feedback)
+            set_column_value(worksheet, headers, student.excel_row, args.feedback_column, feedback)
 
     if args.write or args.write_revised_remark:
         workbook.save(args.workbook)
