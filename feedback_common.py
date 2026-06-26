@@ -13,7 +13,29 @@ PROJECT_DIR = Path(__file__).resolve().parent
 DEFAULT_WORKBOOK = PROJECT_DIR / "Geo_TTh_Student_Script_fixed_rows_only.xlsx"
 DEFAULT_SHEET = "Geo TTh"
 ADDITIONAL_COMMENT_COLUMN = "Additional Comment"
-SECOND_QUIZ_COLUMNS = ("Second Feedback", "Second Feeback")
+SECOND_QUIZ_COLUMNS = ("Quiz2 Score", "Second Quiz Score")
+FIRST_QUIZ_SCORE_COLUMNS = (
+    "Quiz1 Score",
+    "First Quiz Score",
+    "Quiz Feedback",
+    "First Quiz Feedback",
+    "Quiz Score",
+    "Second Feedback",
+    "Second Feeback",
+)
+QUIZ_AVERAGE_COLUMNS = ("Quiz Average", "Class Quiz Average", "First Quiz Average", "Average Quiz Score")
+SECOND_QUIZ_AVERAGE_COLUMNS = ("Quiz2 Average", "Second Quiz Average")
+QUIZ_BANK_COLUMNS = ("Quiz Bank", "Quiz Type", "Quiz Name")
+QUIZ1_MISTAKE_COLUMNS = ("Quiz1 Mistake", "Quiz1 Mistakes", "First Quiz Mistake", "First Quiz Mistakes")
+QUIZ2_MISTAKE_COLUMNS = ("Quiz2 Mistake", "Quiz2 Mistakes", "Second Quiz Mistake", "Second Quiz Mistakes")
+QUIZ_MISTAKE_COLUMNS = (
+    "Quiz Mistake Questions",
+    "Mistake Questions",
+    "Mistake Question",
+    "Wrong Questions",
+    "Incorrect Questions",
+    "Quiz Mistakes",
+)
 FEEDBACK_TYPE_CHOICES = ("comprehensive", "general", "quiz")
 
 

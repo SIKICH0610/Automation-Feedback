@@ -128,7 +128,12 @@ GEOMETRY_VOLUME1_QUIZ2_ISSUES: tuple[QuizIssue, ...] = (
 
 
 def question_numbers_from_note(note: str) -> set[int]:
-    stripped = note.strip()
+    stripped = re.sub(
+        r"\b(?:physical\s*)?quiz\s*\d+\b|\b(?:first|second|third)\s+physical\s+quiz\b",
+        " ",
+        note.strip(),
+        flags=re.IGNORECASE,
+    ).strip(" -:：,，、;；")
     numbers: set[int] = set()
 
     for pattern in (
@@ -140,7 +145,7 @@ def question_numbers_from_note(note: str) -> set[int]:
         )
 
     if re.fullmatch(
-        r"(?:\s*(?:q(?:uestion)?\s*)?\d{1,2}\s*,?)+\s*",
+        r"(?:\s*(?:q(?:uestion)?\s*)?\d{1,2}\s*[,，、;；-]?)+\s*",
         stripped,
         flags=re.IGNORECASE,
     ):

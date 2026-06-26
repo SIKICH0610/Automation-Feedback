@@ -445,20 +445,7 @@ def payload_for_student(
     class_review: str,
     use_api: bool,
     model: str,
-<<<<<<< Updated upstream
     message_column: str = "Feedback",
-) -> str:
-    existing_feedback = value_for(student, message_column)
-    if existing_feedback:
-        return existing_feedback
-
-    if message_column != "Feedback":
-        raise ValueError(
-            f"Row {student.excel_row} does not have a message in column {message_column!r}."
-        )
-
-    feedback = generate_feedback(
-=======
     feedback_type: str,
     action: str,
     mass_message: str,
@@ -466,12 +453,12 @@ def payload_for_student(
     if action == "mass-notification":
         return mass_notification_payload_for_student(student, mass_message=mass_message)
     return comment_payload_for_student(
->>>>>>> Stashed changes
         student,
         class_review=class_review,
         use_api=use_api,
         model=model,
         feedback_type=feedback_type,
+        message_column=message_column,
     )
 
 
@@ -481,13 +468,10 @@ def build_paste_job(
     class_review: str,
     use_api: bool,
     model: str,
-<<<<<<< Updated upstream
     message_column: str = "Feedback",
-=======
     feedback_type: str,
     action: str,
     mass_message: str,
->>>>>>> Stashed changes
 ) -> PasteJob:
     uid = normalize_uid(student.values.get("uid"))
     if not uid:
@@ -518,13 +502,10 @@ def build_paste_job(
             class_review=class_review,
             use_api=use_api,
             model=model,
-<<<<<<< Updated upstream
             message_column=message_column,
-=======
             feedback_type=feedback_type,
             action=action,
             mass_message=mass_message,
->>>>>>> Stashed changes
         ),
         action=action,
     )
@@ -574,13 +555,10 @@ def load_jobs(
     class_review_en: str,
     use_api: bool,
     model: str,
-<<<<<<< Updated upstream
     message_column: str = "Feedback",
-=======
     feedback_type: str,
     action: str,
     mass_message: str,
->>>>>>> Stashed changes
 ) -> list[PasteJob | JobLoadError]:
     workbook = load_workbook(workbook_path, read_only=True)
     if sheet_name not in workbook.sheetnames:
@@ -612,13 +590,10 @@ def load_jobs(
                     class_review=student_class_review,
                     use_api=use_api,
                     model=model,
-<<<<<<< Updated upstream
                     message_column=message_column,
-=======
                     feedback_type=feedback_type,
                     action=action,
                     mass_message=mass_message,
->>>>>>> Stashed changes
                 )
             )
         except ValueError as exc:
@@ -1194,7 +1169,6 @@ def build_parser(
     )
     parser.add_argument("--class-review", default="")
     parser.add_argument("--class-review-file", type=Path)
-<<<<<<< Updated upstream
     parser.add_argument(
         "--message-column",
         default=default_message_column,
@@ -1205,7 +1179,7 @@ def build_parser(
         action="store_true",
         default=default_fallback_channel,
         help="If an automatically selected channel fails, clear state and try the other app.",
-=======
+    )
     parser.add_argument("--class-review-file-zh", type=Path)
     parser.add_argument("--class-review-file-en", type=Path)
     parser.add_argument(
@@ -1229,7 +1203,6 @@ def build_parser(
         "--mass-message-file",
         type=Path,
         help="Text file containing the shared message used with --action mass-notification.",
->>>>>>> Stashed changes
     )
     parser.add_argument("--use-api", action="store_true")
     parser.add_argument("--model", default=DEFAULT_OPENAI_MODEL)
@@ -1573,13 +1546,10 @@ def main(
         class_review_en=class_review_en,
         use_api=args.use_api,
         model=args.model,
-<<<<<<< Updated upstream
         message_column=args.message_column,
-=======
         feedback_type=args.feedback_type,
         action=args.action,
         mass_message=mass_message,
->>>>>>> Stashed changes
     )
 
     app_specs = build_app_specs(

@@ -23,6 +23,7 @@ from feedback_common import (
     load_student_row,
 )
 from feedback_master import FeedbackGenerator, generate_feedback
+from feedback_quiz import format_score, score_and_denominator_from_text
 
 
 def print_student_result(student: StudentRow, feedback: str | None) -> None:
@@ -44,11 +45,8 @@ def export_review_csv(rows: list[dict[str, str]], output_path: Path) -> None:
         "uid",
         "student",
         "status",
-<<<<<<< Updated upstream
         "feedback_column",
-=======
         "feedback_type",
->>>>>>> Stashed changes
         "revised_remark",
         "feedback",
     ]
@@ -58,7 +56,44 @@ def export_review_csv(rows: list[dict[str, str]], output_path: Path) -> None:
         writer.writerows(rows)
 
 
-def build_parser() -> argparse.ArgumentParser:
+def ensure_column(worksheet, headers: list, column_name: str) -> int:
+    if column_name in headers:
+        return find_column(headers, column_name)
+    next_column = len(headers) + 1
+    worksheet.cell(1, next_column).value = column_name
+    headers.append(column_name)
+    return next_column
+
+
+def calculate_average_from_score_column(worksheet, headers: list, score_column: str) -> tuple[str, int]:
+    score_col = find_column(headers, score_column)
+    scores: list[float] = []
+    denominators: list[float] = []
+    for row_number in range(2, worksheet.max_row + 1):
+        text = str(worksheet.cell(row_number, score_col).value or "").strip()
+        if not text:
+            continue
+        score, denominator = score_and_denominator_from_text(text)
+        if score is None:
+            continue
+        scores.append(score)
+        if denominator is not None:
+            denominators.append(denominator)
+
+    if not scores:
+        raise ValueError(f"No numeric quiz scores found in column {score_column!r}.")
+
+    average_score = sum(scores) / len(scores)
+    denominator = denominators[0] if denominators else None
+    average_text = (
+        f"{format_score(round(average_score, 1))}/{format_score(denominator)}"
+        if denominator is not None
+        else format_score(round(average_score, 1))
+    )
+    return average_text, len(scores)
+
+
+def build_parser(*, default_feedback_type: str = "comprehensive") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Generate one parent-facing student feedback entry from the Excel tracker."
     )
@@ -95,14 +130,40 @@ def build_parser() -> argparse.ArgumentParser:
         "--feedback-column",
         default="Feedback",
         help=(
-            "Workbook column to write generated comments into. Examples: "
-            "'Pre-quiz informing', 'Quiz Feedback', 'Second Feeback', or 'Feedback'."
+            "Workbook column to write generated parent-facing messages into. "
+            "Use 'Feedback' for comprehensive comments, 'Quiz1 Feedback' or 'Quiz2 Feedback' "
+            "for quiz-specific comments, and 'Pre-quiz informing' only for shared announcements."
         ),
+    )
+    parser.add_argument(
+        "--calculate-quiz-average",
+        action="store_true",
+        help="Calculate the class average from a quiz score column and write it to each row.",
+    )
+    parser.add_argument(
+        "--quiz-score-column",
+        default="",
+        help="Score column used with --calculate-quiz-average, for example 'Quiz2 Score'.",
+    )
+    parser.add_argument(
+        "--quiz-average-column",
+        default="",
+        help="Average column to write with --calculate-quiz-average, for example 'Quiz2 Average'.",
+    )
+    parser.add_argument(
+        "--only-with-value-column",
+        default="",
+        help="Only generate rows where this workbook column has a non-empty value.",
+    )
+    parser.add_argument(
+        "--clear-feedback-for-missing-value",
+        action="store_true",
+        help="When used with --only-with-value-column and --write, clear the feedback column for rows missing that value.",
     )
     parser.add_argument(
         "--feedback-type",
         choices=FEEDBACK_TYPE_CHOICES,
-        default="comprehensive",
+        default=default_feedback_type,
         help=(
             "general = course description + regular classroom feedback; "
             "quiz = course description + quiz feedback; "
@@ -153,8 +214,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
-    args = build_parser().parse_args()
+def main(*, default_feedback_type: str = "comprehensive") -> None:
+    args = build_parser(default_feedback_type=default_feedback_type).parse_args()
     class_review = args.class_review
     if args.class_review_file:
         class_review = args.class_review_file.read_text(encoding="utf-8").strip()
@@ -176,6 +237,21 @@ def main() -> None:
 
     worksheet = workbook[args.sheet]
     headers = [worksheet.cell(1, col).value for col in range(1, worksheet.max_column + 1)]
+    if args.calculate_quiz_average:
+        if not args.quiz_score_column or not args.quiz_average_column:
+            raise ValueError("--calculate-quiz-average requires --quiz-score-column and --quiz-average-column.")
+        average_text, score_count = calculate_average_from_score_column(
+            worksheet,
+            headers,
+            args.quiz_score_column,
+        )
+        average_col = ensure_column(worksheet, headers, args.quiz_average_column)
+        for row_number in range(2, worksheet.max_row + 1):
+            worksheet.cell(row_number, average_col).value = average_text
+        print(
+            f"Calculated {args.quiz_average_column}: {average_text} "
+            f"from {score_count} scores in {args.quiz_score_column}"
+        )
     if args.write:
         find_column(headers, args.feedback_column)
     if args.all:
@@ -190,11 +266,32 @@ def main() -> None:
             raise ValueError(f"Row {args.row} does not look like a student row.")
         students = [student]
 
+    if args.only_with_value_column:
+        find_column(headers, args.only_with_value_column)
+        all_students = students
+        students = [
+            student
+            for student in all_students
+            if str(student.values.get(args.only_with_value_column) or "").strip()
+        ]
+        if args.write and args.clear_feedback_for_missing_value:
+            for student in all_students:
+                if not str(student.values.get(args.only_with_value_column) or "").strip():
+                    set_column_value(
+                        worksheet,
+                        headers,
+                        student.excel_row,
+                        args.feedback_column,
+                        "",
+                    )
+
     print(f"Sheet: {args.sheet}")
     print(f"Mode: {'all rows' if args.all else 'single row'}")
     print(f"Feedback type: {args.feedback_type}")
     print(f"Write feedback: {'yes' if args.write else 'no, preview only'}")
     print(f"Feedback column: {args.feedback_column}")
+    if args.only_with_value_column:
+        print(f"Only rows with value in: {args.only_with_value_column}")
     print()
 
     generated = 0
@@ -238,11 +335,8 @@ def main() -> None:
                 "uid": normalize_uid(student.values.get("uid")),
                 "student": student.full_name,
                 "status": "skipped_absent" if feedback is None else "generated",
-<<<<<<< Updated upstream
                 "feedback_column": args.feedback_column,
-=======
                 "feedback_type": args.feedback_type,
->>>>>>> Stashed changes
                 "revised_remark": revised_remark,
                 "feedback": feedback or "",
             }

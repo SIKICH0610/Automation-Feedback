@@ -1,13 +1,3 @@
-<<<<<<< Updated upstream
-from paste_sender import main
-
-
-if __name__ == "__main__":
-    main(
-        default_message_column="Pre-quiz informing",
-        default_fallback_channel=True,
-    )
-=======
 from __future__ import annotations
 
 from pathlib import Path
@@ -35,4 +25,13 @@ def mass_notification_payload_for_student(student: StudentRow, *, mass_message: 
             "or --class-review-file text."
         )
     return mass_message.strip()
->>>>>>> Stashed changes
+
+
+def main() -> None:
+    from paste_sender import main as sender_main
+
+    sender_main(default_message_column="Pre-quiz informing", default_fallback_channel=True)
+
+
+if __name__ == "__main__":
+    main()

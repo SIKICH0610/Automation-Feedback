@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
+from geometry_volume1_quiz2_comment_bank import build_geometry_volume1_quiz2_comment
+
 
 @dataclass(frozen=True)
 class QuizIssue:
@@ -90,7 +92,12 @@ GEOMETRY_VOLUME1_QUIZ1_ISSUES: tuple[QuizIssue, ...] = (
 
 
 def question_numbers_from_note(note: str) -> set[int]:
-    stripped = note.strip()
+    stripped = re.sub(
+        r"\b(?:physical\s*)?quiz\s*\d+\b|\b(?:first|second|third)\s+physical\s+quiz\b",
+        " ",
+        note.strip(),
+        flags=re.IGNORECASE,
+    ).strip(" -:：,，、;；")
     numbers: set[int] = set()
 
     for pattern in (
@@ -102,7 +109,7 @@ def question_numbers_from_note(note: str) -> set[int]:
         )
 
     if re.fullmatch(
-        r"(?:\s*(?:q(?:uestion)?\s*)?\d{1,2}\s*,?)+\s*",
+        r"(?:\s*(?:q(?:uestion)?\s*)?\d{1,2}\s*[,，、;；-]?)+\s*",
         stripped,
         flags=re.IGNORECASE,
     ):
@@ -135,6 +142,15 @@ def comment_sentences_for_note(note: str, *, language: str = "Chinese") -> list[
 
 
 def build_geometry_volume1_quiz1_comment(note: str, *, language: str = "Chinese") -> str:
+    if re.search(r"\b(?:physical\s*)?quiz\s*2\b|\bsecond\s+physical\s+quiz\b", note, flags=re.IGNORECASE):
+        routed_note = re.sub(
+            r"\b(?:physical\s*)?quiz\s*2\b|\bsecond\s+physical\s+quiz\b|[:：-]",
+            " ",
+            note,
+            flags=re.IGNORECASE,
+        )
+        return build_geometry_volume1_quiz2_comment(routed_note, language=language)
+
     sentences = comment_sentences_for_note(note, language=language)
     if not sentences:
         return ""

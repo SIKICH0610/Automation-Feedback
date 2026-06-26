@@ -1,10 +1,3 @@
-<<<<<<< Updated upstream
-from paste_sender import main
-
-
-if __name__ == "__main__":
-    main(default_message_column="Feedback")
-=======
 from __future__ import annotations
 
 from openai_api import DEFAULT_OPENAI_MODEL
@@ -19,10 +12,16 @@ def comment_payload_for_student(
     use_api: bool,
     model: str = DEFAULT_OPENAI_MODEL,
     feedback_type: str = "comprehensive",
+    message_column: str = "Feedback",
 ) -> str:
-    existing_feedback = str(student.values.get("Feedback") or "").strip()
+    existing_feedback = str(student.values.get(message_column) or "").strip()
     if existing_feedback:
         return existing_feedback
+
+    if message_column != "Feedback":
+        raise ValueError(
+            f"Row {student.excel_row} does not have a message in column {message_column!r}."
+        )
 
     feedback = generate_feedback(
         student,
@@ -34,4 +33,13 @@ def comment_payload_for_student(
     if not feedback:
         raise ValueError(f"Row {student.excel_row} has no feedback because the student is absent.")
     return feedback
->>>>>>> Stashed changes
+
+
+def main() -> None:
+    from paste_sender import main as sender_main
+
+    sender_main(default_message_column="Feedback")
+
+
+if __name__ == "__main__":
+    main()

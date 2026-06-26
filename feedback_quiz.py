@@ -3,13 +3,22 @@ from __future__ import annotations
 import re
 
 from feedback_common import (
+    FIRST_QUIZ_SCORE_COLUMNS,
+    QUIZ_AVERAGE_COLUMNS,
+    QUIZ1_MISTAKE_COLUMNS,
+    QUIZ2_MISTAKE_COLUMNS,
+    QUIZ_BANK_COLUMNS,
+    QUIZ_MISTAKE_COLUMNS,
     SECOND_QUIZ_COLUMNS,
+    SECOND_QUIZ_AVERAGE_COLUMNS,
     StudentRow,
     additional_comment_for_local_message,
     join_naturally,
     sentence_join_zh,
     value_from_any_column,
 )
+from geometry_volume1_quiz1_comment_bank import build_geometry_volume1_quiz1_comment
+from geometry_volume1_quiz2_comment_bank import build_geometry_volume1_quiz2_comment
 
 def quiz_score_from_remark(remark: str) -> float | None:
     match = re.search(r"(\d+(?:\.\d+)?)\s*/\s*8", remark)
@@ -23,20 +32,34 @@ def numeric_score_from_text(text: str) -> float | None:
         return None
     return float(match.group(1))
 
-def second_quiz_score_parts(text: str) -> tuple[float | None, float | None]:
-    plus_match = re.search(
-        r"(\d+(?:\.\d+)?)\s*(?:/\s*4)?\s*(?:\+|＋)\s*(\d+(?:\.\d+)?)",
-        text,
-    )
-    if plus_match:
-        return float(plus_match.group(1)), float(plus_match.group(2))
-
-    fraction_match = re.search(r"(\d+(?:\.\d+)?)\s*/\s*4", text)
+def score_and_denominator_from_text(text: str) -> tuple[float | None, float | None]:
+    fraction_match = re.search(r"(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)", text)
     if fraction_match:
-        return float(fraction_match.group(1)), None
+        return float(fraction_match.group(1)), float(fraction_match.group(2))
+
+    if len(text.strip()) > 30:
+        return None, None
 
     score = numeric_score_from_text(text)
     return score, None
+
+def score_components_from_text(text: str) -> tuple[float | None, float | None, float | None]:
+    plus_match = re.search(
+        r"(\d+(?:\.\d+)?)\s*(?:/\s*(\d+(?:\.\d+)?))?\s*(?:\+|＋)\s*(\d+(?:\.\d+)?)",
+        text,
+    )
+    if plus_match:
+        score = float(plus_match.group(1))
+        denominator = float(plus_match.group(2)) if plus_match.group(2) else None
+        bonus = float(plus_match.group(3))
+        return score, denominator, bonus
+
+    score, denominator = score_and_denominator_from_text(text)
+    return score, denominator, None
+
+def second_quiz_score_parts(text: str) -> tuple[float | None, float | None]:
+    score, _denominator, bonus = score_components_from_text(text)
+    return score, bonus
 
 def second_quiz_total_score(text: str) -> float | None:
     base_score, bonus_score = second_quiz_score_parts(text)
@@ -61,9 +84,9 @@ def score_display_from_text(text: str, default_denominator: str = "/4") -> str:
     return f"{format_score(score)}{default_denominator}"
 
 def second_quiz_score_display(text: str, is_chinese: bool) -> str:
-    base_score, bonus_score = second_quiz_score_parts(text)
+    base_score, denominator, bonus_score = score_components_from_text(text)
     if base_score is not None and bonus_score is not None:
-        base = f"{format_score(base_score)}/4"
+        base = f"{format_score(base_score)}/{format_score(denominator or 4)}"
         if is_chinese:
             return f"{base}，bonus 为 {format_score(bonus_score)}"
         bonus_word = "point" if bonus_score == 1 else "points"
@@ -106,16 +129,114 @@ def english_quiz_score_sentence(score: float) -> str:
         )
     return f"The quiz score was {score_text}/8, which is around the class average."
 
+def first_quiz_score_text(student: StudentRow) -> str:
+    return value_from_any_column(student, FIRST_QUIZ_SCORE_COLUMNS)
+
+def first_quiz_average_text(student: StudentRow) -> str:
+    return value_from_any_column(student, QUIZ_AVERAGE_COLUMNS)
+
+def first_quiz_score_sentence(student: StudentRow, is_chinese: bool) -> str:
+    score_text = first_quiz_score_text(student)
+    if not score_text:
+        return ""
+
+    score, denominator = score_and_denominator_from_text(score_text)
+    if score is None:
+        return ""
+
+    average_score, average_denominator = score_and_denominator_from_text(first_quiz_average_text(student))
+    denominator = denominator or average_denominator or 10
+    score_display = f"{format_score(score)}/{format_score(denominator)}"
+    average_display = (
+        f"{format_score(average_score)}/{format_score(average_denominator or denominator)}"
+        if average_score is not None
+        else ""
+    )
+    ratio = score / denominator if denominator else 0
+    below_average = average_score is not None and score < average_score
+
+    if is_chinese:
+        if below_average:
+            return (
+                f"本次 quiz 的成绩为 {score_display}，低于本次班级平均分 {average_display}，"
+                "建议接下来复习时多关注错题对应的知识点和证明书写过程。"
+            )
+        if ratio >= 0.9:
+            return f"本次 quiz 的成绩为 {score_display}，整体表现很稳定，说明前面几讲的基础掌握得比较扎实。"
+        if ratio >= 0.75:
+            average_part = f"，本次班级平均分为 {average_display}" if average_display else ""
+            return f"本次 quiz 的成绩为 {score_display}{average_part}，整体达到比较稳的水平，之后可以继续通过错题复习来补细节。"
+        return (
+            f"本次 quiz 的成绩为 {score_display}，说明部分知识点还需要继续巩固，"
+            "尤其要把错题中的条件、图形关系和证明步骤重新整理清楚。"
+        )
+
+    if below_average:
+        return (
+            f"The quiz score was {score_display}, which is below the class average of {average_display}. "
+            "The next step is to review the related concepts and proof-writing process through the missed questions."
+        )
+    if ratio >= 0.9:
+        return f"The quiz score was {score_display}, which is a strong result and shows solid understanding of the first few lessons."
+    if ratio >= 0.75:
+        average_part = f", with the class average at {average_display}" if average_display else ""
+        return f"The quiz score was {score_display}{average_part}. This is a steady result, and reviewing the missed questions will help strengthen the details."
+    return (
+        f"The quiz score was {score_display}. Some topics still need review, especially the conditions, diagram relationships, and proof steps connected to the missed questions."
+    )
+
 def second_quiz_text(student: StudentRow) -> str:
     return value_from_any_column(student, SECOND_QUIZ_COLUMNS)
+
+def second_quiz_average_text(student: StudentRow) -> str:
+    return value_from_any_column(student, SECOND_QUIZ_AVERAGE_COLUMNS)
+
+def selected_quiz_bank(student: StudentRow) -> str:
+    configured_bank = value_from_any_column(student, QUIZ_BANK_COLUMNS).lower()
+    if "2" in configured_bank or "second" in configured_bank:
+        return "quiz2"
+    if "1" in configured_bank or "first" in configured_bank:
+        return "quiz1"
+    if second_quiz_text(student):
+        return "quiz2"
+    if value_from_any_column(student, (*QUIZ2_MISTAKE_COLUMNS,)):
+        return "quiz2"
+    return "quiz1"
+
+def quiz_mistake_note(student: StudentRow, quiz_bank: str) -> str:
+    if quiz_bank == "quiz2":
+        return value_from_any_column(student, (*QUIZ2_MISTAKE_COLUMNS, *QUIZ_MISTAKE_COLUMNS))
+    return value_from_any_column(student, (*QUIZ1_MISTAKE_COLUMNS, *QUIZ_MISTAKE_COLUMNS))
+
+def quiz_bank_comment(student: StudentRow, is_chinese: bool) -> str:
+    quiz_bank = selected_quiz_bank(student)
+    note = quiz_mistake_note(student, quiz_bank)
+    if not note:
+        return ""
+
+    language = "Chinese" if is_chinese else "English"
+    if quiz_bank == "quiz2":
+        return build_geometry_volume1_quiz2_comment(note, language=language)
+    return build_geometry_volume1_quiz1_comment(note, language=language)
 
 def second_quiz_score_sentence(student: StudentRow, is_chinese: bool) -> str:
     text = second_quiz_text(student)
     if not text:
         return ""
 
-    score = second_quiz_total_score(text)
+    score, denominator, bonus_score = score_components_from_text(text)
+    total_score = second_quiz_total_score(text)
     score_display = second_quiz_score_display(text, is_chinese)
+    average_score, average_denominator = score_and_denominator_from_text(second_quiz_average_text(student))
+    denominator = denominator or average_denominator or 4
+    average_display = (
+        f"{format_score(average_score)}/{format_score(average_denominator or denominator)}"
+        if average_score is not None
+        else ""
+    )
+    comparison_score = total_score if bonus_score is not None else score
+    ratio = (comparison_score / denominator) if comparison_score is not None and denominator else None
+    below_average = average_score is not None and comparison_score is not None and comparison_score < average_score
 
     lower = text.lower()
     has_bonus = "bonus" in lower or "加" in text
@@ -127,27 +248,35 @@ def second_quiz_score_sentence(student: StudentRow, is_chinese: bool) -> str:
             base = f"第二次 quiz 的成绩为 {score_display}（包含 bonus）"
         else:
             base = f"第二次 quiz 的成绩为 {score_display}"
+        if average_display:
+            base = f"{base}，本次班级平均分为 {average_display}"
 
-        if score is not None:
-            if score >= 3.5:
-                return f"{base}，整体表现不错，说明等腰三角形、角平分线、垂直平分线和勾股定理这部分掌握得比较稳定。"
-            if score >= 3:
-                return f"{base}，整体接近本次 quiz 的平均水平，后续可以继续加强证明书写的规范性，特别是使用 HL 时要明确直角三角形条件。"
-            return f"{base}，建议接下来重点复习等腰三角形、角平分线、垂直平分线和勾股定理，并特别注意使用 HL 证明全等时要先明确直角三角形。"
-        return f"第二次 quiz 的记录为：{text}。"
+        if comparison_score is not None:
+            if below_average:
+                return f"{base}，低于本次平均水平，建议接下来结合错题重点复习相关定理的使用条件、图形对应关系和证明步骤。"
+            if ratio is not None and ratio >= 0.85:
+                return f"{base}，整体表现很不错，说明这部分知识掌握比较稳定。"
+            if ratio is not None and ratio >= 0.7:
+                return f"{base}，整体接近或达到本次平均水平，之后可以继续通过错题复习来补足细节。"
+            return f"{base}，建议接下来重点复习错题对应的知识点，并特别注意证明书写的完整性。"
+        return f"第二次 quiz 的记录为 {text}。"
 
     if has_bonus and not without_bonus and not has_bonus_amount:
         base = f"The second quiz score was {score_display} with the bonus included"
     else:
         base = f"The second quiz score was {score_display}"
+    if average_display:
+        base = f"{base}, and the class average was {average_display}"
 
-    if score is not None:
-        if score >= 3.5:
+    if comparison_score is not None:
+        if below_average:
+            return f"{base}. This is below the class average, so reviewing the missed-question topics, theorem conditions, diagram relationships, and proof structure will be especially helpful."
+        if ratio is not None and ratio >= 0.85:
             return f"{base}, which is a solid result and shows steady understanding of the recent triangle topics."
-        if score >= 3:
+        if ratio is not None and ratio >= 0.7:
             return f"{base}, which is around the class average. The next step is to keep proof writing precise, especially when using HL by clearly stating the right-triangle condition."
         return f"{base}. It would be helpful to review isosceles triangles, angle bisectors, perpendicular bisectors, and the Pythagorean Theorem, while paying close attention to the right-triangle condition when using HL."
-    return f"The second quiz note is: {text}."
+    return f"The second quiz note is {text}."
 
 def chinese_observation_sentence(name: str, observations: list[str], language: str) -> str:
     if not observations:
@@ -224,8 +353,12 @@ def quiz_comment_paragraph(
     include_observations: bool = False,
 ) -> str | None:
     remark = str(student.values.get("Remark for Student") or "").strip()
+    quiz_bank = selected_quiz_bank(student)
+    first_quiz_sentence = first_quiz_score_sentence(student, is_chinese)
     second_quiz_sentence = second_quiz_score_sentence(student, is_chinese)
-    if "quiz" not in remark.lower() and "/8" not in remark and not second_quiz_sentence:
+    bank_comment = quiz_bank_comment(student, is_chinese)
+    has_remark_quiz_signal = "quiz" in remark.lower() or bool(re.search(r"\d+(?:\.\d+)?\s*/\s*\d+", remark))
+    if not has_remark_quiz_signal and not first_quiz_sentence and not second_quiz_sentence and not bank_comment:
         return None
 
     name = student.first_name or student.full_name
@@ -234,12 +367,16 @@ def quiz_comment_paragraph(
 
     if is_chinese:
         sentences: list[str] = []
-        if score is not None:
+        if quiz_bank == "quiz1" and first_quiz_sentence:
+            sentences.append(first_quiz_sentence)
+        elif quiz_bank == "quiz1" and score is not None:
             sentences.append(chinese_quiz_score_sentence(score))
-        if second_quiz_sentence:
+        if quiz_bank == "quiz2" and second_quiz_sentence:
             sentences.append(second_quiz_sentence)
+        if bank_comment:
+            sentences.append(bank_comment)
 
-        focus = chinese_quiz_focus_sentences(remark)
+        focus = [] if bank_comment else chinese_quiz_focus_sentences(remark)
         if focus:
             focus_text = sentence_join_zh(focus)
             if score is not None and score >= 7.5:
@@ -247,27 +384,34 @@ def quiz_comment_paragraph(
             else:
                 sentences.append(f"从这次 quiz 和课堂情况来看，{name} 接下来可以重点关注{focus_text}。")
         else:
-            if remark:
+            if has_remark_quiz_signal and remark and not bank_comment:
                 sentences.append(f"老师已经把{name}本次 quiz 相关的课堂记录整理进反馈，后续会继续结合错题类型和证明书写情况进行跟进。")
 
         if include_observations and observations:
             sentences.append(chinese_observation_sentence(name, observations, student.language))
         if additional_comment:
             sentences.append(additional_comment + "。")
-        sentences.append("后续可以继续复习前半部分知识，并在计算准确性和证明步骤完整性上多检查。")
+        if quiz_bank == "quiz2":
+            sentences.append("后续可以结合这次错题继续复习对应定理的使用条件、图形中的对应关系，以及证明步骤的完整性。")
+        else:
+            sentences.append("后续可以继续复习前半部分知识，并在计算准确性和证明步骤完整性上多检查。")
         return "".join(sentences)
 
     sentences = []
-    if score is not None:
+    if quiz_bank == "quiz1" and first_quiz_sentence:
+        sentences.append(first_quiz_sentence)
+    elif quiz_bank == "quiz1" and score is not None:
         sentences.append(english_quiz_score_sentence(score))
-    if second_quiz_sentence:
+    if quiz_bank == "quiz2" and second_quiz_sentence:
         sentences.append(second_quiz_sentence)
+    if bank_comment:
+        sentences.append(bank_comment)
 
-    focus = english_quiz_focus_sentences(remark)
+    focus = [] if bank_comment else english_quiz_focus_sentences(remark)
     if focus:
         focus_text = ", and ".join(focus)
-        sentences.append(f"{name} can build from this by continuing to focus on {focus_text}.")
-    elif remark:
+        sentences.append(f"{name} can build from this by {focus_text}.")
+    elif has_remark_quiz_signal and remark and not bank_comment:
         sentences.append(
             f"The teacher's quiz-related classroom note has been included, and we will keep following {name}'s error patterns and proof-writing habits."
         )
@@ -276,6 +420,9 @@ def quiz_comment_paragraph(
         sentences.append(english_observation_sentence(name, observations, student.language))
     if additional_comment:
         sentences.append(additional_comment + ".")
-    sentences.append("Going forward, reviewing the first-half topics while checking calculation details and proof structure carefully will help keep the foundation strong.")
+    if quiz_bank == "quiz2":
+        sentences.append("Going forward, reviewing the missed-question topics, the conditions for each theorem, the corresponding relationships in the diagram, and the proof structure will be especially helpful.")
+    else:
+        sentences.append("Going forward, reviewing the first-half topics while checking calculation details and proof structure carefully will help keep the foundation strong.")
     return " ".join(sentences)
 
