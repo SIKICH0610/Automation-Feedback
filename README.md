@@ -4,8 +4,14 @@ Generate one parent-facing feedback entry from the provided Excel tracker.
 
 ## Project Files
 
-- `feedback_generator.py`: preview or write feedback for one row, a row range, or the whole sheet.
-- `paste_sender.py`: supervised one-row desktop paste helper for WeCom / 企业微信. It checks app status and never sends.
+- `feedback_generator.py`: CLI wrapper for previewing or writing feedback into the existing `Feedback` cells.
+- `feedback_common.py`: shared workbook, student-row, wording, and formatting helpers.
+- `feedback_general.py`: regular classroom-feedback wording.
+- `feedback_quiz.py`: quiz-score parsing and quiz-feedback wording.
+- `feedback_master.py`: master generator that can call general, quiz, or comprehensive feedback.
+- `paste_sender.py`: CLI wrapper for supervised paste actions. It checks app status and never sends.
+- `paste_comment.py`: row-specific comment payload selection.
+- `paste_mass_notification.py`: shared mass-notification payload selection.
 - `class_review_builder.py`: create or overwrite `class_review.txt` from teacher text, notes, or slides.
 - `workbook_setup.py`: prepare optional workbook columns such as `Additional Comment`.
 - `openai_api.py`: shared OpenAI API helper.
@@ -111,6 +117,16 @@ Preview every student row in the sheet:
 python feedback_generator.py --sheet "Geo TTh" --all --class-review-file class_review.txt
 ```
 
+Choose which kind of feedback to generate:
+
+```powershell
+python feedback_generator.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --feedback-type general
+python feedback_generator.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --feedback-type quiz
+python feedback_generator.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --feedback-type comprehensive
+```
+
+`general` writes the course description plus regular classroom feedback. `quiz` writes the course description plus quiz-focused feedback. `comprehensive` writes the course description plus both quiz and regular feedback. Writing with `--write` updates the existing `Feedback` cells in the same workbook; it does not create a copy of the sheet.
+
 ## Write one entry back to Excel
 
 ```powershell
@@ -171,6 +187,14 @@ Paste a mixed batch without sending. Rows route to WeCom or WhatsApp from the wo
 .\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --start-row 2 --end-row 8 --class-review-file class_review.txt --mode paste-only
 ```
 
+Paste one shared mass notification to each selected chat without sending:
+
+```powershell
+.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --start-row 2 --end-row 8 --action mass-notification --mass-message-file notice.txt --mode paste-only
+```
+
+`--action comment` is the default and pastes each row's `Feedback` value. `--action mass-notification` pastes the same shared text for every selected row. Shared text can come from `--mass-message`, `--mass-message-file`, or, if neither is provided, `--class-review-file`.
+
 The paste helper recognizes window titles containing `WeCom`, `企业微信`, or `WXWork` by default. It does not press Enter after pasting, and it does not use calculated screen-position clicks. If WeCom / 企业微信 is installed in a custom location, pass `--wecom-exe "C:\path\to\WXWork.exe"` or set `WECOM_EXE`. If Enter cannot open the result on a computer, try `--ui-control-result-open` or `--manual-result-click`. Add `--require-verification` if you want the script to stop whenever it cannot verify the chat by UI text.
 
 Paste multiple specific rows automatically without sending:
@@ -206,6 +230,7 @@ python paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_revie
 - `--review-csv`: Save generated preview rows to a UTF-8 CSV with row, UID, student, status, revised remark, and feedback columns.
 - `--class-review`: What the class covered today. This becomes the first paragraph.
 - `--class-review-file`: Optional text file containing the class review.
+- `--feedback-type`: `comprehensive`, `general`, or `quiz`. Defaults to `comprehensive`.
 - `--use-api`: Use OpenAI to polish the student-specific parent comment.
 - `--revise-remark`: Use OpenAI to revise `Remark for Student` first.
 - `--write-revised-remark`: Save the revised remark back to the sheet.

@@ -4,7 +4,9 @@
 
 同时，学生们也完成了第一次 quiz。本次 quiz 满分为 8 分，包含 7 道选择题和 1 道证明题。证明题有 partial credit，如果证明题中错误较多，特别是错两处及以上，则可能无法获得该题分数。本次 quiz 的平均分为 6.9/8。整体来看，如果孩子的分数低于 6.5 分，建议您适当关注一下目前的学习掌握情况，尤其是计算细节和证明书写的规范性。
 
-接下来的 Geometry 学习会涉及更多计算，因此希望孩子们在做题时更加细心，注意步骤完整、计算准确。周四我们还会安排一次简单的小测验，一共 4 道题，主要检测学生对等腰三角形、角平分线、垂直平分线以及勾股定理的理解和运用。
+我们也进行了第二次 quiz。本次 quiz 一共有 4 道题，以及 1 道 bonus 题，主要涉及等腰三角形、角平分线、垂直平分线以及勾股定理等知识点。平均分加上 bonus 为 3.5 分，不加 bonus 为 3.3 分。孩子们比较常见的错误是在证明题中，使用 HL（Hypotenuse-Leg Theorem）证明三角形全等时书写不够规范，尤其需要明确强调所讨论的是直角三角形（Rt Triangle）。Bonus 题是关于三角函数的课上内容，主要让学生默写常见三角函数值。
+
+接下来的 Geometry 学习会涉及更多计算，因此希望孩子们在做题时更加细心，注意步骤完整、计算准确。
 
 之后，我们将进入后半部分课程的学习，内容会包括三角函数、平行四边形、菱形、梯形、圆，以及相似三角形的证明。后半部分课程会有更多计算和综合应用，也会更加依赖前半部分知识的熟练掌握，因此希望同学们课后及时复习前面的重点内容，打好基础。
 
@@ -15,6 +17,8 @@ Hello parents, we have now completed the first half of our Geometry Summer Camp.
 
 Students have also completed their first quiz. The quiz was out of 8 points and included 7 multiple-choice questions and 1 proof question. The proof question allowed partial credit, but students could lose the full proof score if there were two or more significant mistakes. The class average was 6.9/8. In general, if a student scored below 6.5, it may be helpful to pay closer attention to their current understanding, especially their calculation accuracy and proof-writing structure.
 
-As we move forward, Geometry will involve more calculation, so students will need to be more careful with their work, show complete steps, and check their answers closely. On Thursday, we will also have a short quiz with 4 questions. This quiz will check students' understanding and application of isosceles triangles, angle bisectors, perpendicular bisectors, and the Pythagorean Theorem.
+Students have also completed their second quiz. This quiz had 4 questions plus 1 bonus question, covering isosceles triangles, angle bisectors, perpendicular bisectors, and the Pythagorean Theorem. The class average was 3.5 points with the bonus included and 3.3 points without the bonus. One common issue was proof-writing format when using HL, the Hypotenuse-Leg Theorem, to prove triangle congruence. In particular, students need to clearly state that the triangles are right triangles before applying HL. The bonus question was connected to our in-class trigonometry content and asked students to recall common trigonometric values.
+
+As we move forward, Geometry will involve more calculation, so students will need to be more careful with their work, show complete steps, and check their answers closely.
 
 After that, we will begin the second half of the course, which will include trigonometry, parallelograms, rhombi, trapezoids, circles, and proofs involving similar triangles. The second half of the course will include more calculations and more mixed applications, so students will need to be comfortable with the topics from the first half. I encourage students to review these key concepts regularly so they can build a strong foundation for the remaining lessons.
