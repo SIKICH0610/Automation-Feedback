@@ -15,15 +15,17 @@ from urllib.parse import quote
 
 from openpyxl import load_workbook
 
-from feedback_generator import (
+from feedback_common import (
     DEFAULT_SHEET,
     DEFAULT_WORKBOOK,
+    FEEDBACK_TYPE_CHOICES,
     StudentRow,
-    generate_feedback,
     normalize_uid,
     student_from_worksheet,
 )
 from openai_api import DEFAULT_OPENAI_MODEL
+from paste_comment import comment_payload_for_student
+from paste_mass_notification import mass_notification_payload_for_student, resolve_mass_message
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -41,6 +43,7 @@ PREFERRED_CHANNEL_COLUMN = "Preferred Channel"
 WHATSAPP_PHONE_COLUMN = "WhatsApp Phone"
 WHATSAPP_SEARCH_KEY_COLUMN = "WhatsApp Search Key"
 WHATSAPP_TARGET_TYPE_COLUMN = "WhatsApp Target Type"
+PASTE_ACTION_CHOICES = ("comment", "mass-notification")
 
 
 @dataclass
@@ -81,6 +84,7 @@ class PasteJob:
     whatsapp_phone: str
     whatsapp_target_type: str
     feedback: str
+    action: str = "comment"
 
 
 @dataclass
@@ -435,12 +439,13 @@ def write_job_status(
     workbook.close()
 
 
-def feedback_for_student(
+def payload_for_student(
     student: StudentRow,
     *,
     class_review: str,
     use_api: bool,
     model: str,
+<<<<<<< Updated upstream
     message_column: str = "Feedback",
 ) -> str:
     existing_feedback = value_for(student, message_column)
@@ -453,14 +458,21 @@ def feedback_for_student(
         )
 
     feedback = generate_feedback(
+=======
+    feedback_type: str,
+    action: str,
+    mass_message: str,
+) -> str:
+    if action == "mass-notification":
+        return mass_notification_payload_for_student(student, mass_message=mass_message)
+    return comment_payload_for_student(
+>>>>>>> Stashed changes
         student,
         class_review=class_review,
         use_api=use_api,
         model=model,
+        feedback_type=feedback_type,
     )
-    if not feedback:
-        raise ValueError(f"Row {student.excel_row} has no feedback because the student is absent.")
-    return feedback
 
 
 def build_paste_job(
@@ -469,7 +481,13 @@ def build_paste_job(
     class_review: str,
     use_api: bool,
     model: str,
+<<<<<<< Updated upstream
     message_column: str = "Feedback",
+=======
+    feedback_type: str,
+    action: str,
+    mass_message: str,
+>>>>>>> Stashed changes
 ) -> PasteJob:
     uid = normalize_uid(student.values.get("uid"))
     if not uid:
@@ -495,13 +513,20 @@ def build_paste_job(
         expected_chat_name=build_expected_chat_name(student, uid),
         whatsapp_phone=phone,
         whatsapp_target_type=target_type,
-        feedback=feedback_for_student(
+        feedback=payload_for_student(
             student,
             class_review=class_review,
             use_api=use_api,
             model=model,
+<<<<<<< Updated upstream
             message_column=message_column,
+=======
+            feedback_type=feedback_type,
+            action=action,
+            mass_message=mass_message,
+>>>>>>> Stashed changes
         ),
+        action=action,
     )
 
 
@@ -545,10 +570,17 @@ def load_jobs(
     *,
     sheet_name: str,
     row_numbers: list[int],
-    class_review: str,
+    class_review_zh: str,
+    class_review_en: str,
     use_api: bool,
     model: str,
+<<<<<<< Updated upstream
     message_column: str = "Feedback",
+=======
+    feedback_type: str,
+    action: str,
+    mass_message: str,
+>>>>>>> Stashed changes
 ) -> list[PasteJob | JobLoadError]:
     workbook = load_workbook(workbook_path, read_only=True)
     if sheet_name not in workbook.sheetnames:
@@ -571,13 +603,22 @@ def load_jobs(
             continue
 
         try:
+            student_class_review = (
+                class_review_zh if student.language.lower().startswith("chinese") else class_review_en
+            )
             jobs.append(
                 build_paste_job(
                     student,
-                    class_review=class_review,
+                    class_review=student_class_review,
                     use_api=use_api,
                     model=model,
+<<<<<<< Updated upstream
                     message_column=message_column,
+=======
+                    feedback_type=feedback_type,
+                    action=action,
+                    mass_message=mass_message,
+>>>>>>> Stashed changes
                 )
             )
         except ValueError as exc:
@@ -669,14 +710,9 @@ class WeComPasteRobot:
 
     def search_result_candidates(self, job: PasteJob) -> list[tuple[int, Any, str]]:
         window = self.focus_window()
-        blocked_phrases = (
-            "search for mobile",
-            "global search",
-            "ctrl+alt+f",
-        )
-        name_parts = [part for part in job.student_name.split() if part]
-        elements: list[tuple[Any, str, Any, str]] = []
-        blocked_tops: list[int] = []
+        name_parts = [part.lower() for part in job.student_name.split() if part]
+        expected_chat_name = job.expected_chat_name.lower()
+        elements: list[tuple[Any, str, Any]] = []
         candidates: list[tuple[int, Any, str]] = []
 
         for element in window.descendants():
@@ -687,42 +723,50 @@ class WeComPasteRobot:
                 continue
             if not text or text == job.search_key:
                 continue
-
-            lowered = text.lower()
-            if any(phrase in lowered for phrase in blocked_phrases):
-                blocked_tops.append(rectangle.top)
-
-            elements.append((element, text, rectangle, lowered))
-
-        first_blocked_top = min(blocked_tops) if blocked_tops else None
-
-        for element, text, rectangle, lowered in elements:
-            if any(phrase in lowered for phrase in blocked_phrases):
+            if rectangle.width() < 20 or rectangle.height() < 8:
                 continue
-            if first_blocked_top is not None and rectangle.top >= first_blocked_top - 2:
+            elements.append((element, text, rectangle))
+
+        elements.sort(key=lambda item: (item[2].top, item[2].left))
+        bands: list[list[tuple[Any, str, Any]]] = []
+        for item in elements:
+            rectangle = item[2]
+            if not bands:
+                bands.append([item])
                 continue
 
-            score = 0
-            if job.uid in text:
-                score += 100
-            if job.expected_chat_name and job.expected_chat_name in text:
-                score += 60
-            if any(part in text for part in name_parts):
-                score += 30
-            if "external" in lowered:
-                score += 10
-            if "group chat name" in lowered:
-                score -= 25
+            previous_bottom = max(existing[2].bottom for existing in bands[-1])
+            if rectangle.top - previous_bottom > 24:
+                bands.append([item])
+            else:
+                bands[-1].append(item)
 
-            if score > 0 and rectangle.width() > 20 and rectangle.height() > 8:
-                candidates.append((score, element, text))
+        for band in bands:
+            combined_text = "\n".join(item[1] for item in band)
+            combined_lower = combined_text.lower()
+            uid_ok = bool(job.uid and job.uid in combined_text)
+            expected_ok = bool(expected_chat_name and expected_chat_name in combined_lower)
+            name_hits = sum(1 for part in name_parts if part in combined_lower)
+
+            has_identity_match = expected_ok or (uid_ok and name_hits > 0)
+            if not has_identity_match:
+                continue
+
+            score = (120 if expected_ok else 0) + (100 if uid_ok else 0) + (30 * name_hits)
+
+            def element_score(item: tuple[Any, str, Any]) -> int:
+                _, text, rectangle = item
+                lowered = text.lower()
+                identity_score = (100 if job.uid and job.uid in text else 0) + (
+                    30 * sum(1 for part in name_parts if part in lowered)
+                )
+                return identity_score + min(rectangle.width() * rectangle.height(), 5000)
+
+            element, _, _ = max(band, key=element_score)
+            candidates.append((score, element, combined_text.replace("\n", " | ")))
 
         candidates.sort(key=lambda candidate: candidate[0], reverse=True)
         return candidates
-
-    def search_overlay_visible(self) -> bool:
-        text = self.visible_text().lower()
-        return "search for mobile" in text or "global search" in text or "groups chats" in text
 
     def search_input_element(self, search_key: str) -> Any | None:
         window = self.focus_window()
@@ -742,8 +786,19 @@ class WeComPasteRobot:
     def search_input_contains(self, search_key: str) -> bool:
         return self.search_input_element(search_key) is not None
 
+    def element_has_keyboard_focus(self, element: Any) -> bool:
+        try:
+            return bool(element.has_keyboard_focus())
+        except Exception:
+            pass
+        try:
+            return bool(element.element_info.has_keyboard_focus)
+        except Exception:
+            return False
+
     def search_is_active(self, job: PasteJob) -> bool:
-        return self.search_overlay_visible() or self.search_input_contains(job.search_key)
+        search_input = self.search_input_element(job.search_key)
+        return search_input is not None and self.element_has_keyboard_focus(search_input)
 
     def clear_search_state(self, job: PasteJob) -> None:
         try:
@@ -790,7 +845,7 @@ class WeComPasteRobot:
         self.search_chat(job.search_key)
         candidates = self.search_result_candidates(job)
         if not candidates:
-            print("No safe group-chat candidates found above the online/global-search rows.")
+            print("No matching group-chat candidates found in the search results.")
             return
         print("Safe WeCom search candidates:")
         for score, element, text in candidates[:10]:
@@ -893,7 +948,7 @@ class WeComPasteRobot:
             raise RuntimeError("Install clipboard dependency first: python -m pip install pyperclip") from exc
 
         if not self.focus_message_input():
-            print("Could not focus the WeCom message input box by UI Automation; pasting directly into the active WeCom chat.")
+            print("Could not focus the WeCom message input box by UI Automation; pasting into the active WeCom chat.")
             self.focus_window()
 
         pyperclip.copy(feedback)
@@ -1084,6 +1139,7 @@ def print_job(job: PasteJob) -> None:
     print(f"Student: {job.student_name}")
     print(f"Parent language: {job.parent_language}")
     print(f"Channel: {job.channel}")
+    print(f"Action: {job.action}")
     print(f"Search key: {job.search_key}")
     print(f"Expected chat name: {job.expected_chat_name}")
     if job.channel == "whatsapp":
@@ -1138,6 +1194,7 @@ def build_parser(
     )
     parser.add_argument("--class-review", default="")
     parser.add_argument("--class-review-file", type=Path)
+<<<<<<< Updated upstream
     parser.add_argument(
         "--message-column",
         default=default_message_column,
@@ -1148,6 +1205,31 @@ def build_parser(
         action="store_true",
         default=default_fallback_channel,
         help="If an automatically selected channel fails, clear state and try the other app.",
+=======
+    parser.add_argument("--class-review-file-zh", type=Path)
+    parser.add_argument("--class-review-file-en", type=Path)
+    parser.add_argument(
+        "--feedback-type",
+        choices=FEEDBACK_TYPE_CHOICES,
+        default="comprehensive",
+        help="Feedback type to generate only when a row has no existing Feedback cell.",
+    )
+    parser.add_argument(
+        "--action",
+        choices=PASTE_ACTION_CHOICES,
+        default="comment",
+        help="comment = paste each row's Feedback; mass-notification = paste one shared message to each selected chat.",
+    )
+    parser.add_argument(
+        "--mass-message",
+        default="",
+        help="Shared message used with --action mass-notification.",
+    )
+    parser.add_argument(
+        "--mass-message-file",
+        type=Path,
+        help="Text file containing the shared message used with --action mass-notification.",
+>>>>>>> Stashed changes
     )
     parser.add_argument("--use-api", action="store_true")
     parser.add_argument("--model", default=DEFAULT_OPENAI_MODEL)
@@ -1445,6 +1527,9 @@ def run_job(
                 f"Fallback {fallback_channel} attempt failed with {fallback_error}."
             )
 
+    if result.pasted and job.action == "mass-notification":
+        result.status = "mass_notification_pasted"
+
     if result.pasted:
         print("Pasted only. The script did not send the message.")
     elif result.error:
@@ -1464,15 +1549,37 @@ def main(
     class_review = args.class_review
     if args.class_review_file:
         class_review = args.class_review_file.read_text(encoding="utf-8").strip()
+    class_review_zh = (
+        args.class_review_file_zh.read_text(encoding="utf-8").strip()
+        if args.class_review_file_zh
+        else class_review
+    )
+    class_review_en = (
+        args.class_review_file_en.read_text(encoding="utf-8").strip()
+        if args.class_review_file_en
+        else class_review
+    )
+    mass_message = resolve_mass_message(
+        mass_message=args.mass_message,
+        mass_message_file=args.mass_message_file,
+        fallback_text=class_review,
+    )
 
     jobs = load_jobs(
         args.workbook,
         sheet_name=args.sheet,
         row_numbers=selected_row_numbers(args),
-        class_review=class_review,
+        class_review_zh=class_review_zh,
+        class_review_en=class_review_en,
         use_api=args.use_api,
         model=args.model,
+<<<<<<< Updated upstream
         message_column=args.message_column,
+=======
+        feedback_type=args.feedback_type,
+        action=args.action,
+        mass_message=mass_message,
+>>>>>>> Stashed changes
     )
 
     app_specs = build_app_specs(
@@ -1524,7 +1631,9 @@ def main(
         elif result.status == "failed":
             failed += 1
 
-        if should_write_status and result.status in {"pasted", "needs_review", "skipped_absent", "failed"}:
+        if should_write_status and (
+            result.pasted or result.status in {"needs_review", "skipped_absent", "failed"}
+        ):
             write_job_status(
                 args.workbook,
                 args.sheet,
