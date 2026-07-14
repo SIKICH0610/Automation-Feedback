@@ -20,7 +20,6 @@ Generate one parent-facing feedback entry from the provided Excel tracker.
 - `openai_api.py`: shared OpenAI API helper.
 - `class_review.txt`: editable class-level paragraph used as paragraph 1.
 - `Geo_TTh_Student_Script_fixed_rows_only.xlsx`: one-time import source for the frontend and default workbook for direct CLI commands.
-- `docs/commands.md`: quick command reference.
 
 The initial Excel feedback form lives in this project folder:
 
