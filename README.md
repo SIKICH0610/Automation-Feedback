@@ -4,6 +4,9 @@ Generate one parent-facing feedback entry from the provided Excel tracker.
 
 ## Project Files
 
+- `database_store.py`: SQLite roster storage, one-time Excel migration, temporary action workbooks, and safe exports.
+- `frontend_server.py`: local browser interface and action runner.
+- `frontend/`: editable roster, announcements, quiz fields, feedback generation, paste controls, and Excel export.
 - `feedback_generator.py`: CLI wrapper for previewing or writing feedback into the existing `Feedback` cells.
 - `feedback_common.py`: shared workbook, student-row, wording, and formatting helpers.
 - `feedback_general.py`: regular classroom-feedback wording.
@@ -16,16 +19,18 @@ Generate one parent-facing feedback entry from the provided Excel tracker.
 - `workbook_setup.py`: prepare optional workbook columns such as `Additional Comment`.
 - `openai_api.py`: shared OpenAI API helper.
 - `class_review.txt`: editable class-level paragraph used as paragraph 1.
-- `Geo_TTh_Student_Script_fixed_rows_only.xlsx`: local workbook copy used by default.
+- `Geo_TTh_Student_Script_fixed_rows_only.xlsx`: one-time import source for the frontend and default workbook for direct CLI commands.
 - `docs/commands.md`: quick command reference.
 
-The Excel feedback form also lives in this project folder:
+The initial Excel feedback form lives in this project folder:
 
 ```text
 Geo_TTh_Student_Script_fixed_rows_only.xlsx
 ```
 
-By default, the scripts read and write this local copy.
+On the first frontend launch, its sheets and student rows are imported into `app_data/feedback.db`. After that migration, the frontend, generators, and paste actions use SQLite as the live source of truth. Editing the original `.xlsx` file does not change the frontend database.
+
+Direct command-line scripts still use the workbook passed with `--workbook`. Those legacy CLI writes do not update the frontend database unless they are launched through the frontend action buttons.
 
 ## Setup
 
@@ -42,6 +47,22 @@ Optional API key for GPT-assisted workflows:
 ```powershell
 $env:OPENAI_API_KEY="your_api_key_here"
 ```
+
+## Local frontend
+
+Start the editable workbook interface:
+
+```powershell
+.\.venv\Scripts\python.exe frontend_server.py
+```
+
+The app opens at `http://127.0.0.1:8765`. Each class sheet has its own linked UTF-8 announcement file in `announcements`. The frontend saves student edits into `app_data/feedback.db`, generates general or quiz feedback, and runs the supervised paste-only workflow for selected rows.
+
+The original workbook is imported only when the database is created for the first time. Use **Export Excel** in the roster toolbar when you need a spreadsheet copy. The export is written to `exports/Student_Feedback_Export.xlsx`. Editing that exported file does not change the live database.
+
+To back up the live system, copy `app_data/feedback.db` while the frontend is stopped. The `app_data`, `exports`, and `announcements` folders are ignored by Git so private student data is not committed accidentally.
+
+Close the terminal or press `Ctrl+C` to stop the local server.
 
 ## Prepare the workbook
 

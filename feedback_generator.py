@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 from pathlib import Path
+import sys
 
 from openpyxl import load_workbook
 
@@ -24,6 +25,12 @@ from feedback_common import (
 )
 from feedback_master import FeedbackGenerator, generate_feedback
 from feedback_quiz import format_score, score_and_denominator_from_text
+
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
 def print_student_result(student: StudentRow, feedback: str | None) -> None:
@@ -93,6 +100,30 @@ def calculate_average_from_score_column(worksheet, headers: list, score_column: 
     return average_text, len(scores)
 
 
+def parse_row_numbers(row_spec: str) -> list[int]:
+    rows: list[int] = []
+    for part in row_spec.split(","):
+        item = part.strip()
+        if not item:
+            continue
+        if "-" in item:
+            start_text, end_text = item.split("-", 1)
+            start = int(start_text.strip())
+            end = int(end_text.strip())
+            if end < start:
+                raise ValueError(f"Invalid row range {item!r}: end row is before start row.")
+            rows.extend(range(start, end + 1))
+        else:
+            rows.append(int(item))
+
+    unique_rows = list(dict.fromkeys(rows))
+    if not unique_rows:
+        raise ValueError("--rows did not contain any row numbers.")
+    if any(row < 2 for row in unique_rows):
+        raise ValueError("Student rows must be row 2 or later.")
+    return unique_rows
+
+
 def build_parser(*, default_feedback_type: str = "comprehensive") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Generate one parent-facing student feedback entry from the Excel tracker."
@@ -109,6 +140,10 @@ def build_parser(*, default_feedback_type: str = "comprehensive") -> argparse.Ar
         "--all",
         action="store_true",
         help="Generate feedback for every student row in the selected sheet.",
+    )
+    parser.add_argument(
+        "--rows",
+        help="Comma-separated rows or ranges to generate, such as 3,5 or 3-6.",
     )
     parser.add_argument(
         "--start-row",
@@ -254,7 +289,14 @@ def main(*, default_feedback_type: str = "comprehensive") -> None:
         )
     if args.write:
         find_column(headers, args.feedback_column)
-    if args.all:
+    if args.rows:
+        students = []
+        for row_number in parse_row_numbers(args.rows):
+            student = student_from_worksheet(worksheet, headers, row_number)
+            if not student:
+                raise ValueError(f"Row {row_number} does not look like a student row.")
+            students.append(student)
+    elif args.all:
         students = iter_student_rows(
             worksheet,
             start_row=args.start_row,
@@ -286,7 +328,13 @@ def main(*, default_feedback_type: str = "comprehensive") -> None:
                     )
 
     print(f"Sheet: {args.sheet}")
-    print(f"Mode: {'all rows' if args.all else 'single row'}")
+    if args.rows:
+        mode = f"selected rows {args.rows}"
+    elif args.all:
+        mode = "all rows"
+    else:
+        mode = "single row"
+    print(f"Mode: {mode}")
     print(f"Feedback type: {args.feedback_type}")
     print(f"Write feedback: {'yes' if args.write else 'no, preview only'}")
     print(f"Feedback column: {args.feedback_column}")

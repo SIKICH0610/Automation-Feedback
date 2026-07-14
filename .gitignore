@@ -1,8 +1,12 @@
-__pycache__/
+﻿__pycache__/
 *.py[cod]
 .env
 .venv/
 venv/
 outputs/
 tmp_*.xlsx
+
+app_data/
+exports/
+announcements/
 

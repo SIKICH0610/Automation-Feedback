@@ -1,0 +1,163 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Teacher Feedback Desk</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-block">
+        <p class="eyebrow">Local database</p>
+        <h1>Teacher Feedback Desk</h1>
+        <p id="database-path" class="workbook-path">Loading database...</p>
+      </div>
+      <div class="topbar-status">
+        <span id="save-state" class="status-pill is-neutral">Loading</span>
+        <span class="status-pill is-safe">Paste-only mode</span>
+      </div>
+    </header>
+
+    <nav id="sheet-tabs" class="sheet-tabs" aria-label="Class sheets"></nav>
+
+    <main class="workspace">
+      <section class="roster-panel" aria-labelledby="roster-title">
+        <div class="panel-toolbar">
+          <div>
+            <p class="eyebrow">Student sheet</p>
+            <h2 id="roster-title">Roster</h2>
+          </div>
+          <div class="toolbar-controls">
+            <label class="field compact-field">
+              <span>Columns</span>
+              <select id="column-view">
+                <option value="student">Student info</option>
+                <option value="general">General feedback</option>
+                <option value="quiz1">Quiz 1</option>
+                <option value="quiz2">Quiz 2</option>
+                <option value="audit">Send status</option>
+                <option value="all">All columns</option>
+              </select>
+            </label>
+            <div class="field compact-field search-field">
+              <div class="search-label-row">
+                <label for="student-search">Find student</label>
+                <select id="search-scope" aria-label="Search scope">
+                  <option value="current">Current class</option>
+                  <option value="all">All classes</option>
+                </select>
+              </div>
+              <input id="student-search" type="search" placeholder="Name or UID" autocomplete="off">
+              <div id="search-results" class="search-results" role="listbox" aria-label="Student search results" hidden></div>
+            </div>
+            <button id="add-row" class="button secondary" type="button">+ Add student</button>
+            <button id="export-excel" class="button secondary" type="button">Export Excel</button>
+            <button id="save-sheet" class="button primary" type="button">Save sheet</button>
+          </div>
+        </div>
+
+        <div class="selection-strip">
+          <div>
+            <strong id="selection-count">0 selected</strong>
+            <span id="row-count">0 students</span>
+          </div>
+          <button id="select-visible" class="text-button" type="button">Select visible</button>
+          <button id="clear-selection" class="text-button" type="button">Clear</button>
+        </div>
+
+        <div id="table-wrap" class="table-wrap" tabindex="0">
+          <table id="student-table">
+            <thead id="student-head"></thead>
+            <tbody id="student-body"></tbody>
+          </table>
+          <div id="empty-state" class="empty-state" hidden>No student rows match this view.</div>
+        </div>
+      </section>
+
+      <aside class="control-rail">
+        <section class="side-section announcement-section" aria-labelledby="announcement-title">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Linked file</p>
+              <h2 id="announcement-title">Announcement</h2>
+            </div>
+            <button id="save-announcement" class="button secondary small" type="button">Save</button>
+          </div>
+          <textarea id="announcement-text" rows="12" placeholder="Write the class announcement or course description here"></textarea>
+          <p id="announcement-path" class="file-path"></p>
+        </section>
+
+        <section class="side-section action-section" aria-labelledby="actions-title">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Selected students</p>
+              <h2 id="actions-title">Actions</h2>
+            </div>
+          </div>
+
+          <div class="action-group">
+            <p class="group-label">General</p>
+            <button class="action-button generate" data-action="generate-comments" type="button">
+              <span>Generate comments</span>
+              <small>Writes to Feedback</small>
+            </button>
+            <button class="action-button paste" data-action="paste-announcement" type="button">
+              <span>Paste announcement</span>
+              <small>Shared text</small>
+            </button>
+            <button class="action-button paste" data-action="paste-comments" type="button">
+              <span>Paste comments</span>
+              <small>Student-specific text</small>
+            </button>
+          </div>
+
+          <div class="action-group">
+            <div class="quiz-heading">
+              <p class="group-label">Quiz</p>
+              <div class="segmented-control" aria-label="Quiz number">
+                <button class="segment is-active" data-quiz="1" type="button">Quiz 1</button>
+                <button class="segment" data-quiz="2" type="button">Quiz 2</button>
+              </div>
+            </div>
+            <button class="action-button generate" data-action="generate-quiz-feedback" type="button">
+              <span>Generate quiz feedback</span>
+              <small id="quiz-generate-target">Writes to Quiz1 Feedback</small>
+            </button>
+            <button class="action-button paste" data-action="paste-quiz-feedback" type="button">
+              <span>Paste quiz feedback</span>
+              <small id="quiz-paste-target">Uses Quiz1 Feedback</small>
+            </button>
+          </div>
+        </section>
+
+        <section class="side-section activity-section" aria-labelledby="activity-title">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Latest run</p>
+              <h2 id="activity-title">Activity</h2>
+            </div>
+            <button id="clear-log" class="text-button" type="button">Clear</button>
+          </div>
+          <pre id="activity-log" aria-live="polite">Ready.</pre>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <div id="busy-overlay" class="busy-overlay" hidden>
+    <div class="busy-dialog" role="status" aria-live="assertive">
+      <div class="spinner"></div>
+      <strong id="busy-title">Working</strong>
+      <span id="busy-detail">Please keep this window open.</span>
+    </div>
+  </div>
+
+  <div id="toast-region" class="toast-region" aria-live="polite"></div>
+</body>
+</html>
+
+
+
