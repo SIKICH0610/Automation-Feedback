@@ -17,6 +17,7 @@ from feedback_common import (
     sentence_join_zh,
     value_from_any_column,
 )
+from amc10_quiz1_comment_bank import build_amc10_quiz1_comment
 from geometry_volume1_quiz1_comment_bank import build_geometry_volume1_quiz1_comment
 from geometry_volume1_quiz2_comment_bank import build_geometry_volume1_quiz2_comment
 
@@ -193,6 +194,8 @@ def second_quiz_average_text(student: StudentRow) -> str:
 
 def selected_quiz_bank(student: StudentRow) -> str:
     configured_bank = value_from_any_column(student, QUIZ_BANK_COLUMNS).lower()
+    if "amc10" in configured_bank or "amc 10" in configured_bank:
+        return "amc10_quiz1"
     if "2" in configured_bank or "second" in configured_bank:
         return "quiz2"
     if "1" in configured_bank or "first" in configured_bank:
@@ -215,6 +218,8 @@ def quiz_bank_comment(student: StudentRow, is_chinese: bool) -> str:
         return ""
 
     language = "Chinese" if is_chinese else "English"
+    if quiz_bank == "amc10_quiz1":
+        return build_amc10_quiz1_comment(note, language=language)
     if quiz_bank == "quiz2":
         return build_geometry_volume1_quiz2_comment(note, language=language)
     return build_geometry_volume1_quiz1_comment(note, language=language)
@@ -367,9 +372,9 @@ def quiz_comment_paragraph(
 
     if is_chinese:
         sentences: list[str] = []
-        if quiz_bank == "quiz1" and first_quiz_sentence:
+        if quiz_bank in ("quiz1", "amc10_quiz1") and first_quiz_sentence:
             sentences.append(first_quiz_sentence)
-        elif quiz_bank == "quiz1" and score is not None:
+        elif quiz_bank in ("quiz1", "amc10_quiz1") and score is not None:
             sentences.append(chinese_quiz_score_sentence(score))
         if quiz_bank == "quiz2" and second_quiz_sentence:
             sentences.append(second_quiz_sentence)
@@ -398,9 +403,9 @@ def quiz_comment_paragraph(
         return "".join(sentences)
 
     sentences = []
-    if quiz_bank == "quiz1" and first_quiz_sentence:
+    if quiz_bank in ("quiz1", "amc10_quiz1") and first_quiz_sentence:
         sentences.append(first_quiz_sentence)
-    elif quiz_bank == "quiz1" and score is not None:
+    elif quiz_bank in ("quiz1", "amc10_quiz1") and score is not None:
         sentences.append(english_quiz_score_sentence(score))
     if quiz_bank == "quiz2" and second_quiz_sentence:
         sentences.append(second_quiz_sentence)

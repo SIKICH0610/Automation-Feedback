@@ -23,7 +23,17 @@ FIRST_QUIZ_SCORE_COLUMNS = (
     "Second Feedback",
     "Second Feeback",
 )
+<<<<<<< Updated upstream
 QUIZ_AVERAGE_COLUMNS = ("Quiz1 Average", "Quiz Average", "Class Quiz Average", "First Quiz Average", "Average Quiz Score")
+=======
+QUIZ_AVERAGE_COLUMNS = (
+    "Quiz1 Average",
+    "Quiz Average",
+    "Class Quiz Average",
+    "First Quiz Average",
+    "Average Quiz Score",
+)
+>>>>>>> Stashed changes
 SECOND_QUIZ_AVERAGE_COLUMNS = ("Quiz2 Average", "Second Quiz Average")
 QUIZ_BANK_COLUMNS = ("Quiz Bank", "Quiz Type", "Quiz Name")
 QUIZ1_MISTAKE_COLUMNS = ("Quiz1 Mistake", "Quiz1 Mistakes", "First Quiz Mistake", "First Quiz Mistakes")
