@@ -11,10 +11,15 @@ Generate one parent-facing feedback entry from the provided Excel tracker.
 - `feedback_common.py`: shared workbook, student-row, wording, and formatting helpers.
 - `feedback_general.py`: regular classroom-feedback wording.
 - `feedback_quiz.py`: quiz-score parsing and quiz-feedback wording.
+- `quiz_bank_store.py`: encapsulated SQLite storage, validation, matching, and runtime access for editable quiz banks.
+- `geometry_volume1_quiz1_comment_bank.py`: default Quiz 1 bank used for first-time database seeding.
+- `geometry_volume1_quiz2_comment_bank.py`: default Quiz 2 bank used for first-time database seeding.
 - `feedback_master.py`: master generator that can call general, quiz, or comprehensive feedback.
 - `paste_sender.py`: CLI wrapper for supervised paste actions. It checks app status and never sends.
 - `paste_comment.py`: row-specific comment payload selection.
 - `paste_mass_notification.py`: shared mass-notification payload selection.
+- `attachment_store.py`: private SQLite attachment storage for each class.
+- `paste_attachments.py`: coordinate-free Windows file clipboard staging.
 - `class_review_builder.py`: create or overwrite `class_review.txt` from teacher text, notes, or slides.
 - `workbook_setup.py`: prepare optional workbook columns such as `Additional Comment`.
 - `openai_api.py`: shared OpenAI API helper.
@@ -55,7 +60,9 @@ Start the editable workbook interface:
 .\.venv\Scripts\python.exe frontend_server.py
 ```
 
-The app opens at `http://127.0.0.1:8765`. Each class sheet has its own linked UTF-8 announcement file in `announcements`. The frontend saves student edits into `app_data/feedback.db`, generates general or quiz feedback, and runs the supervised paste-only workflow for selected rows.
+The app opens at `http://127.0.0.1:8765`. Each class sheet has its own linked UTF-8 announcement file in `announcements`. The frontend saves student edits and uploaded images or documents into `app_data/feedback.db`, generates general or quiz feedback, and runs the supervised paste-only workflow for selected rows.
+
+Open **Quiz Banks** in the top navigation to edit question numbers, titles, matching patterns, and Chinese or English feedback. Quiz bank entries are stored in the same `app_data/feedback.db` database. The Python bank files are imported only when the corresponding database bank is first created. After that, frontend edits are the live source used by quiz-feedback generation.
 
 The original workbook is imported only when the database is created for the first time. Use **Export Excel** in the roster toolbar when you need a spreadsheet copy. The export is written to `exports/Student_Feedback_Export.xlsx`. Editing that exported file does not change the live database.
 
@@ -212,6 +219,14 @@ Paste one shared mass notification to each selected chat without sending:
 ```powershell
 .\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --start-row 2 --end-row 8 --action mass-notification --mass-message-file notice.txt --mode paste-only
 ```
+
+Stage an announcement and local files in one chat without sending:
+
+```powershell
+.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --row 2 --action mass-notification --mass-message-file notice.txt --attachment ".\handout.pdf" --attachment ".\diagram.png" --mode paste-only
+```
+
+The frontend provides the same workflow through **Add files** and **Paste announcement**. Attachments are staged with the Windows file clipboard, so the process does not depend on window coordinates. The chat preview remains open for manual review and the robot never presses Send. Because that preview blocks navigation, attachment runs process one selected student at a time.
 
 `--action comment` is the default and pastes each row's `Feedback` value. `--action mass-notification` pastes the same shared text for every selected row. Shared text can come from `--mass-message`, `--mass-message-file`, or, if neither is provided, `--class-review-file`.
 

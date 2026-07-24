@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from contextlib import contextmanager
 from copy import copy
@@ -14,6 +14,9 @@ from uuid import uuid4
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
+
+from attachment_store import SQLiteAttachmentStore
+from quiz_bank_store import SQLiteQuizBankStore
 
 
 SCHEMA_VERSION = "1"
@@ -177,6 +180,14 @@ class SQLiteFeedbackStore:
         self.app_data_dir.mkdir(parents=True, exist_ok=True)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize_database()
+        self.quiz_banks = SQLiteQuizBankStore(
+            self.database_path,
+            lock=self.lock,
+        )
+        self.attachments = SQLiteAttachmentStore(
+            self.database_path,
+            lock=self.lock,
+        )
         self.ensure_announcement_files()
 
     @contextmanager
@@ -438,6 +449,7 @@ class SQLiteFeedbackStore:
             "rows": rows,
             "announcement": announcement,
             "announcement_path": str(announcement_path),
+            "attachments": self.list_attachments(sheet_name),
         }
 
     def search_students(self, query: str, limit: int = 50) -> list[dict[str, Any]]:
@@ -488,6 +500,60 @@ class SQLiteFeedbackStore:
         matches.sort(key=lambda item: item[0])
         safe_limit = max(1, min(int(limit), 100))
         return [result for _, result in matches[:safe_limit]]
+
+    def list_quiz_banks(self) -> list[dict[str, Any]]:
+        return self.quiz_banks.list_banks()
+
+    def list_attachments(self, sheet_name: str) -> list[dict[str, Any]]:
+        return self.attachments.list_for_sheet(sheet_name)
+
+    def add_attachment(
+        self,
+        sheet_name: str,
+        *,
+        filename: str,
+        content_type: str,
+        file_data: bytes,
+    ) -> dict[str, Any]:
+        return self.attachments.add(
+            sheet_name,
+            filename=filename,
+            content_type=content_type,
+            file_data=file_data,
+        )
+
+    def remove_attachment(self, sheet_name: str, attachment_id: str) -> None:
+        self.attachments.remove(sheet_name, attachment_id)
+
+    def get_attachment(self, attachment_id: str) -> dict[str, Any]:
+        return self.attachments.get(attachment_id)
+
+    def materialize_attachments(
+        self,
+        sheet_name: str,
+        attachment_ids: list[str],
+        target_dir: Path,
+    ) -> list[Path]:
+        return self.attachments.materialize(sheet_name, attachment_ids, target_dir)
+    def load_quiz_bank(self, bank_id: str) -> dict[str, Any]:
+        return self.quiz_banks.load_bank(bank_id)
+
+    def save_quiz_bank(
+        self,
+        bank_id: str,
+        *,
+        class_name: str,
+        quiz_name: str,
+        display_name: str,
+        entries: Any,
+    ) -> dict[str, Any]:
+        return self.quiz_banks.save_bank(
+            bank_id,
+            class_name=class_name,
+            quiz_name=quiz_name,
+            display_name=display_name,
+            entries=entries,
+        )
 
     def save_sheet(self, sheet_name: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
         if not isinstance(rows, list):

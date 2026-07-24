@@ -19,11 +19,6 @@ def resolve_mass_message(
 
 
 def mass_notification_payload_for_student(student: StudentRow, *, mass_message: str) -> str:
-    if not mass_message.strip():
-        raise ValueError(
-            "Mass notification action needs --mass-message, --mass-message-file, "
-            "or --class-review-file text."
-        )
     return mass_message.strip()
 
 

@@ -20,6 +20,11 @@ from feedback_common import (
 from amc10_quiz1_comment_bank import build_amc10_quiz1_comment
 from geometry_volume1_quiz1_comment_bank import build_geometry_volume1_quiz1_comment
 from geometry_volume1_quiz2_comment_bank import build_geometry_volume1_quiz2_comment
+from quiz_bank_store import (
+    QUIZ1_BANK_ID,
+    QUIZ2_BANK_ID,
+    runtime_quiz_bank_comment,
+)
 
 def quiz_score_from_remark(remark: str) -> float | None:
     match = re.search(r"(\d+(?:\.\d+)?)\s*/\s*8", remark)
@@ -220,6 +225,14 @@ def quiz_bank_comment(student: StudentRow, is_chinese: bool) -> str:
     language = "Chinese" if is_chinese else "English"
     if quiz_bank == "amc10_quiz1":
         return build_amc10_quiz1_comment(note, language=language)
+    bank_id = QUIZ2_BANK_ID if quiz_bank == "quiz2" else QUIZ1_BANK_ID
+    stored_comment = runtime_quiz_bank_comment(
+        bank_id,
+        note,
+        language=language,
+    )
+    if stored_comment is not None:
+        return stored_comment
     if quiz_bank == "quiz2":
         return build_geometry_volume1_quiz2_comment(note, language=language)
     return build_geometry_volume1_quiz1_comment(note, language=language)

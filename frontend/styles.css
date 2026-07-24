@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   color-scheme: light;
   --canvas: #f4f6f5;
   --surface: #ffffff;
@@ -568,6 +568,97 @@ thead th:nth-child(-n+3) {
   line-height: 1.55;
 }
 
+.attachment-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.attachment-toolbar > div {
+  min-width: 0;
+}
+
+.attachment-toolbar .group-label {
+  margin-bottom: 2px;
+}
+
+#attachment-summary,
+.attachment-empty {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.attachment-list {
+  display: grid;
+  margin-top: 8px;
+}
+
+.attachment-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+
+.attachment-row:first-child {
+  border-top: 0;
+}
+
+.attachment-select {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--teal);
+}
+
+.attachment-file {
+  min-width: 0;
+}
+
+.attachment-name {
+  display: block;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-name:hover {
+  color: var(--teal-dark);
+}
+
+.attachment-meta {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.attachment-remove {
+  min-height: 28px;
+  padding: 3px 6px;
+  color: var(--red);
+  background: transparent;
+  border: 0;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.attachment-remove:hover {
+  background: var(--red-soft);
+}
+
+.attachment-empty {
+  margin: 8px 0 0;
+}
 .action-section {
   display: grid;
   gap: 15px;

@@ -26,6 +26,7 @@ from feedback_common import (
 from openai_api import DEFAULT_OPENAI_MODEL
 from paste_comment import comment_payload_for_student
 from paste_mass_notification import mass_notification_payload_for_student, resolve_mass_message
+from paste_attachments import normalized_attachment_paths, stage_attachments
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -1204,6 +1205,13 @@ def build_parser(
         type=Path,
         help="Text file containing the shared message used with --action mass-notification.",
     )
+    parser.add_argument(
+        "--attachment",
+        action="append",
+        type=Path,
+        default=[],
+        help="Image or document to stage in the chat preview. Repeat for multiple files.",
+    )
     parser.add_argument("--use-api", action="store_true")
     parser.add_argument("--model", default=DEFAULT_OPENAI_MODEL)
     parser.add_argument(
@@ -1352,9 +1360,15 @@ def run_wecom_job(
             raise LookupError("WeCom chat could not be verified.")
         print("WARNING: Could not verify the chat automatically. Continuing because paste-only does not send.")
 
-    robot.paste_feedback(job.feedback)
-    robot.clear_search_state(job)
-    print("Cleared WeCom search box for the next row.")
+    if job.feedback:
+        robot.paste_feedback(job.feedback)
+    if args.attachments:
+        if not job.feedback and not robot.focus_message_input():
+            robot.focus_window()
+        stage_attachments(args.attachments, send_keys=robot.send_keys)
+    else:
+        robot.clear_search_state(job)
+        print("Cleared WeCom search box for the next row.")
     return JobResult(status="pasted", pasted=True)
 
 
@@ -1368,9 +1382,19 @@ def run_whatsapp_job(
     if job.whatsapp_target_type == "phone":
         if not job.whatsapp_phone:
             raise LookupError("WhatsApp phone mode needs a WhatsApp Phone value.")
-        url = f"https://wa.me/{job.whatsapp_phone}?text={quote(job.feedback)}"
+        url = f"https://wa.me/{job.whatsapp_phone}"
+        if job.feedback:
+            url += f"?text={quote(job.feedback)}"
         os.startfile(url)  # type: ignore[attr-defined]
         time.sleep(3)
+        if args.attachments:
+            ensure_desktop_ready(app_spec, app_exe=app_exe, no_auto_open=args.no_auto_open)
+            robot = WhatsAppPasteRobot(
+                title_re=args.whatsapp_title_re,
+                search_shortcut=args.whatsapp_search_shortcut,
+            )
+            robot.focus_window()
+            stage_attachments(args.attachments, send_keys=robot.send_keys)
         return JobResult(status="pasted", pasted=True)
 
     if not job.search_key:
@@ -1387,8 +1411,6 @@ def run_whatsapp_job(
         robot.clear_search_state(job.search_key)
         raise
 
-    robot.paste_feedback(job.feedback)
-
     verified, reason = robot.verify_chat(job)
     print(f"Verification: {reason}")
     if not verified:
@@ -1396,8 +1418,13 @@ def run_whatsapp_job(
             raise LookupError("WhatsApp chat could not be verified.")
         print("WARNING: Could not verify the WhatsApp chat automatically. Continuing because paste-only does not send.")
 
-    robot.clear_search_state(job.search_key)
-    print("Cleared WhatsApp search box for the next row.")
+    if job.feedback:
+        robot.paste_feedback(job.feedback)
+    if args.attachments:
+        stage_attachments(args.attachments, send_keys=robot.send_keys)
+    else:
+        robot.clear_search_state(job.search_key)
+        print("Cleared WhatsApp search box for the next row.")
 
     return JobResult(status="pasted", pasted=True)
 
@@ -1519,6 +1546,7 @@ def main(
         default_message_column=default_message_column,
         default_fallback_channel=default_fallback_channel,
     ).parse_args()
+    args.attachments = normalized_attachment_paths(args.attachment)
     class_review = args.class_review
     if args.class_review_file:
         class_review = args.class_review_file.read_text(encoding="utf-8").strip()
@@ -1537,6 +1565,14 @@ def main(
         mass_message_file=args.mass_message_file,
         fallback_text=class_review,
     )
+    if args.action == "mass-notification" and not mass_message and not args.attachments:
+        raise SystemExit(
+            "Mass notification needs announcement text, at least one attachment, or both."
+        )
+    if args.attachments:
+        print(
+            f"Attachment mode: {len(args.attachments)} file(s) will be staged for manual review."
+        )
 
     jobs = load_jobs(
         args.workbook,
@@ -1551,6 +1587,10 @@ def main(
         action=args.action,
         mass_message=mass_message,
     )
+    if args.attachments and len(jobs) != 1:
+        raise SystemExit(
+            "Attachment previews require manual review. Select exactly one row for each run."
+        )
 
     app_specs = build_app_specs(
         wecom_title_re=args.wecom_title_re,

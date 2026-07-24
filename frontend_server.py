@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 from copy import copy
@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 import threading
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
@@ -20,12 +21,14 @@ import webbrowser
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
+from attachment_store import AttachmentStoreError, MAX_ATTACHMENT_BYTES
 from feedback_common import DEFAULT_WORKBOOK
 from database_store import (
     SQLiteFeedbackStore,
     StoreError,
     announcement_filename,
 )
+from quiz_bank_store import QuizBankStoreError
 
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -60,13 +63,37 @@ class ActionRunner:
             parsed.append(row_number)
         return ",".join(str(row) for row in sorted(set(parsed)))
 
-    def command_for(self, payload: dict[str, Any]) -> tuple[list[str], str]:
+    @staticmethod
+    def _attachment_ids(payload: dict[str, Any]) -> list[str]:
+        raw_ids = payload.get("attachment_ids") or []
+        if not isinstance(raw_ids, list):
+            raise FrontendError("Attachment ids must be provided as a list.")
+        return list(dict.fromkeys(str(value).strip() for value in raw_ids if str(value).strip()))
+
+    def command_for(
+        self,
+        payload: dict[str, Any],
+        *,
+        attachment_paths: list[Path] | None = None,
+    ) -> tuple[list[str], str]:
         action = str(payload.get("action") or "").strip()
         sheet_name = str(payload.get("sheet") or "").strip()
         if sheet_name not in self.store.sheet_names():
             raise FrontendError(f"Sheet {sheet_name!r} was not found.")
         row_spec = self._row_spec(payload.get("rows"))
+        attachment_ids = self._attachment_ids(payload)
+        if attachment_ids and not action.startswith("paste-"):
+            raise FrontendError("Attachments can only be used with paste actions.")
+        if attachment_ids and "," in row_spec:
+            raise FrontendError(
+                "Attachments stay open for review, so select one student for each attachment run."
+            )
         announcement_path = self.store.announcement_path(sheet_name)
+        attachment_args = [
+            item
+            for path in (attachment_paths or [])
+            for item in ("--attachment", str(path))
+        ]
 
         common = [
             "--workbook",
@@ -103,6 +130,7 @@ class ActionRunner:
                 "--mode",
                 "paste-only",
                 "--fallback-channel",
+                *attachment_args,
             ], "Pasted announcement"
 
         if action == "paste-comments":
@@ -116,6 +144,7 @@ class ActionRunner:
                 "Feedback",
                 "--mode",
                 "paste-only",
+                *attachment_args,
             ], "Pasted comments"
 
         if action in {"generate-quiz-feedback", "paste-quiz-feedback"}:
@@ -169,6 +198,7 @@ class ActionRunner:
                 "quiz",
                 "--mode",
                 "paste-only",
+                *attachment_args,
             ], f"Pasted quiz {quiz_number} feedback"
 
         raise FrontendError(f"Unknown action {action!r}.")
@@ -177,31 +207,45 @@ class ActionRunner:
         environment = os.environ.copy()
         environment["PYTHONUTF8"] = "1"
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        environment["FEEDBACK_DATABASE_PATH"] = str(self.store.database_path)
 
-        with self.store.lock:
-            self.store.prepare_runtime_workbook()
-            try:
-                command, label = self.command_for(payload)
+        attachment_ids = self._attachment_ids(payload)
+        with TemporaryDirectory(
+            prefix="attachment_action_",
+            dir=self.store.app_data_dir,
+        ) as temporary_dir:
+            attachment_paths = self.store.materialize_attachments(
+                str(payload.get("sheet") or "").strip(),
+                attachment_ids,
+                Path(temporary_dir),
+            )
+            with self.store.lock:
+                self.store.prepare_runtime_workbook()
                 try:
-                    completed = subprocess.run(
-                        command,
-                        cwd=PROJECT_DIR,
-                        capture_output=True,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
-                        timeout=ACTION_TIMEOUT_SECONDS,
-                        env=environment,
-                        check=False,
+                    command, label = self.command_for(
+                        payload,
+                        attachment_paths=attachment_paths,
                     )
-                except subprocess.TimeoutExpired as exc:
-                    raise FrontendError(
-                        f"{label} timed out after {ACTION_TIMEOUT_SECONDS // 60} minutes."
-                    ) from exc
+                    try:
+                        completed = subprocess.run(
+                            command,
+                            cwd=PROJECT_DIR,
+                            capture_output=True,
+                            text=True,
+                            encoding="utf-8",
+                            errors="replace",
+                            timeout=ACTION_TIMEOUT_SECONDS,
+                            env=environment,
+                            check=False,
+                        )
+                    except subprocess.TimeoutExpired as exc:
+                        raise FrontendError(
+                            f"{label} timed out after {ACTION_TIMEOUT_SECONDS // 60} minutes."
+                        ) from exc
+                    finally:
+                        self.store.sync_runtime_workbook()
                 finally:
-                    self.store.sync_runtime_workbook()
-            finally:
-                self.store.remove_runtime_workbook()
+                    self.store.remove_runtime_workbook()
 
         stdout = completed.stdout.strip()
         stderr = completed.stderr.strip()
@@ -248,6 +292,26 @@ class FrontendHandler(BaseHTTPRequestHandler):
             raise FrontendError("Request body must be a JSON object.")
         return payload
 
+    def _read_binary(self, max_bytes: int) -> bytes:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as exc:
+            raise FrontendError("Invalid request length.") from exc
+        if length <= 0:
+            raise FrontendError("The uploaded file is empty.")
+        if length > max_bytes:
+            raise FrontendError("Each attachment must be 100 MB or smaller.")
+        return self.rfile.read(length)
+
+    def _send_attachment(self, attachment: dict[str, Any]) -> None:
+        content = attachment["file_data"]
+        self.send_response(200)
+        self.send_header("Content-Type", attachment["content_type"])
+        self.send_header("Content-Length", str(len(content)))
+        self.send_header("Content-Disposition", "inline")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(content)
     def _serve_static(self, request_path: str) -> None:
         relative = "index.html" if request_path in {"", "/"} else unquote(request_path.lstrip("/"))
         target = (STATIC_DIR / relative).resolve()
@@ -284,6 +348,7 @@ class FrontendHandler(BaseHTTPRequestHandler):
                         "data_source": "sqlite",
                         "sheets": sheets,
                         "default_sheet": sheets[0] if sheets else "",
+                        "quiz_banks": self.store.list_quiz_banks(),
                         "platform": sys.platform,
                         "paste_supported": os.name == "nt",
                     },
@@ -300,8 +365,25 @@ class FrontendHandler(BaseHTTPRequestHandler):
                     {"ok": True, "results": self.store.search_students(query)},
                 )
                 return
+            if parsed.path == "/api/quiz-banks":
+                self._send_json(
+                    200,
+                    {"ok": True, "banks": self.store.list_quiz_banks()},
+                )
+                return
+            if parsed.path == "/api/quiz-bank":
+                bank_id = parse_qs(parsed.query).get("id", [""])[0]
+                self._send_json(
+                    200,
+                    {"ok": True, "bank": self.store.load_quiz_bank(bank_id)},
+                )
+                return
+            if parsed.path == "/api/attachment":
+                attachment_id = parse_qs(parsed.query).get("id", [""])[0]
+                self._send_attachment(self.store.get_attachment(attachment_id))
+                return
             self._serve_static(parsed.path)
-        except FrontendError as exc:
+        except (AttachmentStoreError, FrontendError, QuizBankStoreError) as exc:
             self._send_json(400, {"ok": False, "error": str(exc)})
         except Exception as exc:
             self._send_json(500, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
@@ -309,6 +391,25 @@ class FrontendHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         try:
+            if parsed.path == "/api/attachment/upload":
+                query = parse_qs(parsed.query)
+                sheet_name = query.get("sheet", [""])[0]
+                filename = query.get("name", [""])[0]
+                attachment = self.store.add_attachment(
+                    sheet_name,
+                    filename=filename,
+                    content_type=self.headers.get("Content-Type", ""),
+                    file_data=self._read_binary(MAX_ATTACHMENT_BYTES),
+                )
+                self._send_json(
+                    200,
+                    {
+                        "ok": True,
+                        "attachment": attachment,
+                        "attachments": self.store.list_attachments(sheet_name),
+                    },
+                )
+                return
             payload = self._read_json()
             if parsed.path == "/api/sheet/save":
                 data = self.store.save_sheet(str(payload.get("sheet") or ""), payload.get("rows"))
@@ -320,6 +421,37 @@ class FrontendHandler(BaseHTTPRequestHandler):
                     str(payload.get("text") or ""),
                 )
                 self._send_json(200, {"ok": True, "path": str(path)})
+                return
+            if parsed.path == "/api/quiz-bank/save":
+                bank = self.store.save_quiz_bank(
+                    str(payload.get("bank_id") or ""),
+                    class_name=str(payload.get("class_name") or ""),
+                    quiz_name=str(payload.get("quiz_name") or ""),
+                    display_name=str(payload.get("display_name") or ""),
+                    entries=payload.get("entries"),
+                )
+                self._send_json(
+                    200,
+                    {
+                        "ok": True,
+                        "bank": bank,
+                        "banks": self.store.list_quiz_banks(),
+                    },
+                )
+                return
+            if parsed.path == "/api/attachment/delete":
+                sheet_name = str(payload.get("sheet") or "")
+                self.store.remove_attachment(
+                    sheet_name,
+                    str(payload.get("attachment_id") or ""),
+                )
+                self._send_json(
+                    200,
+                    {
+                        "ok": True,
+                        "attachments": self.store.list_attachments(sheet_name),
+                    },
+                )
                 return
             if parsed.path == "/api/action":
                 result = self.runner.run(payload)
@@ -337,7 +469,7 @@ class FrontendHandler(BaseHTTPRequestHandler):
                 )
                 return
             self._send_json(404, {"ok": False, "error": "API endpoint not found."})
-        except FrontendError as exc:
+        except (AttachmentStoreError, FrontendError, QuizBankStoreError) as exc:
             self._send_json(400, {"ok": False, "error": str(exc)})
         except Exception as exc:
             self._send_json(500, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
