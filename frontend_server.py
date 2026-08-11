@@ -28,6 +28,7 @@ from database_store import (
     StoreError,
     announcement_filename,
 )
+from import_enrollment import group_by_class, read_enrollment_rows
 from quiz_bank_store import QuizBankStoreError
 
 
@@ -35,6 +36,7 @@ PROJECT_DIR = Path(__file__).resolve().parent
 STATIC_DIR = PROJECT_DIR / "frontend"
 DEFAULT_ANNOUNCEMENT_DIR = PROJECT_DIR / "announcements"
 MAX_REQUEST_BYTES = 8 * 1024 * 1024
+MAX_IMPORT_BYTES = 25 * 1024 * 1024
 ACTION_TIMEOUT_SECONDS = 30 * 60
 
 DEFAULT_APP_DATA_DIR = PROJECT_DIR / "app_data"
@@ -146,6 +148,17 @@ class ActionRunner:
                 "paste-only",
                 *attachment_args,
             ], "Pasted comments"
+
+        if action == "check-group-chat":
+            return [
+                sys.executable,
+                str(PROJECT_DIR / "paste_sender.py"),
+                *common,
+                "--action",
+                "check-group-chat",
+                "--mode",
+                "paste-only",
+            ], "Checked group chat status"
 
         if action in {"generate-quiz-feedback", "paste-quiz-feedback"}:
             quiz_number = str(payload.get("quiz_number") or "1")
@@ -347,6 +360,7 @@ class FrontendHandler(BaseHTTPRequestHandler):
                         "import_source": str(self.store.source_workbook_path),
                         "data_source": "sqlite",
                         "sheets": sheets,
+                        "sheet_groups": self.store.sheet_groups(),
                         "default_sheet": sheets[0] if sheets else "",
                         "quiz_banks": self.store.list_quiz_banks(),
                         "platform": sys.platform,
@@ -363,6 +377,12 @@ class FrontendHandler(BaseHTTPRequestHandler):
                 self._send_json(
                     200,
                     {"ok": True, "results": self.store.search_students(query)},
+                )
+                return
+            if parsed.path == "/api/semesters":
+                self._send_json(
+                    200,
+                    {"ok": True, "semesters": self.store.list_semesters()},
                 )
                 return
             if parsed.path == "/api/quiz-banks":
@@ -409,6 +429,43 @@ class FrontendHandler(BaseHTTPRequestHandler):
                         "attachments": self.store.list_attachments(sheet_name),
                     },
                 )
+                return
+            if parsed.path in {"/api/import/preview", "/api/import/commit"}:
+                query = parse_qs(parsed.query)
+                semester_name = (query.get("semester", [""])[0] or "").strip()
+                if not semester_name:
+                    raise FrontendError("Enter a semester name first.")
+                class_id_raw = query.get("class_ids", [""])[0]
+                class_ids = {value.strip() for value in class_id_raw.split(",") if value.strip()}
+
+                file_bytes = self._read_binary(MAX_IMPORT_BYTES)
+                with TemporaryDirectory(
+                    prefix="enrollment_import_",
+                    dir=self.store.app_data_dir,
+                ) as temporary_dir:
+                    xlsx_path = Path(temporary_dir) / "enrollment.xlsx"
+                    xlsx_path.write_bytes(file_bytes)
+                    try:
+                        rows = read_enrollment_rows(xlsx_path)
+                    except ValueError as exc:
+                        raise FrontendError(str(exc)) from exc
+
+                groups = group_by_class(rows, class_ids=class_ids or None)
+                if not groups:
+                    raise FrontendError(
+                        "No paid, enrolled rows matched this file (or the selected classes)."
+                    )
+
+                commit = parsed.path == "/api/import/commit"
+                with self.store.lock:
+                    plan = self.store.import_students(
+                        semester_name=semester_name,
+                        class_groups=list(groups.values()),
+                        commit=commit,
+                    )
+                    if commit:
+                        self.store.ensure_announcement_files()
+                self._send_json(200, {"ok": True, "plan": plan, "committed": commit})
                 return
             payload = self._read_json()
             if parsed.path == "/api/sheet/save":

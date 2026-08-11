@@ -21,6 +21,7 @@ Generate one parent-facing feedback entry from the provided Excel tracker.
 - `attachment_store.py`: private SQLite attachment storage for each class.
 - `paste_attachments.py`: coordinate-free Windows file clipboard staging.
 - `class_review_builder.py`: create or overwrite `class_review.txt` from teacher text, notes, or slides.
+- `import_enrollment.py`: import a platform enrollment export into the SQLite roster, grouped into a named semester block.
 - `workbook_setup.py`: prepare optional workbook columns such as `Additional Comment`.
 - `openai_api.py`: shared OpenAI API helper.
 - `class_review.txt`: editable class-level paragraph used as paragraph 1.
@@ -86,6 +87,32 @@ Routing columns:
 - `WhatsApp Phone`: parent phone number for direct WhatsApp phone URL mode.
 - `WhatsApp Search Key`: optional group-chat search key. Blank uses `uid`.
 - `WhatsApp Target Type`: optional `phone` or `group_search`. Blank uses `phone` when `WhatsApp Phone` is present, otherwise `group_search`.
+
+## Import a new semester's enrollment
+
+`import_enrollment.py` reads a platform enrollment export (one row per paid, enrolled student order, with `classId`, `className`, `classTimeDescription`, `firstName`/`lastName`, and `学员id`) and adds any classes and students it finds into the SQLite roster, grouped under a semester block you name. Only `payStatus = Paid` and `是否入班 = 是` rows are imported. Parent phone, email, and address are intentionally not imported; contact happens through WeCom/WhatsApp chat search by `uid`, so staff add `Preferred Channel` / `WhatsApp Phone` manually for a family that needs it.
+
+Preview only, nothing is written:
+
+```powershell
+python import_enrollment.py --source-file ".\enrollment_export.xlsx" --semester "2026-27 School Year"
+```
+
+Commit the previewed changes:
+
+```powershell
+python import_enrollment.py --source-file ".\enrollment_export.xlsx" --semester "2026-27 School Year" --commit
+```
+
+Import a single new class into a semester block you already created, instead of every class in the file:
+
+```powershell
+python import_enrollment.py --source-file ".\enrollment_export.xlsx" --semester "2026-27 School Year" --class-id 123790 --commit
+```
+
+Re-running the same file (or a corrected re-export) is safe: an existing semester and class are reused by name / platform `classId`, and a student already on the roster (matched by `uid`) is left untouched rather than duplicated.
+
+The frontend has the same workflow under the **Import Students** tab: choose the `.xlsx` file, type a new semester name (or pick an existing one from the suggestions) to add classes into it, click **Preview** to see the classes and student counts found, uncheck any class you don't want, then **Commit Import**.
 
 ## Create the class review file
 
@@ -253,6 +280,18 @@ To inspect which safe WeCom search candidates the script sees:
 ```powershell
 python paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --debug-search-results
 ```
+
+## Check group chat status
+
+`--action check-group-chat` searches WeCom or WhatsApp for each selected row's chat by `uid`, the same safe search used by `--debug-search-results`, but never opens or pastes into a chat. It writes `TRUE`/`FALSE` back to the existing `Group Chat` column: `TRUE` when a matching chat is found, `FALSE` when it is not. Rows that could not be checked (app not available, WhatsApp phone-target rows, etc.) are left unchanged and reported as `needs_review` instead of being guessed.
+
+For a row with no `Preferred Channel` and no `Parent Language` set (the common case for freshly imported students), the check searches WeCom first, since most families are Chinese-speaking; only if that finds nothing does it check WhatsApp. Whichever channel actually finds the chat also fills in `Parent Language` (`Chinese` for WeCom, `English` for WhatsApp), so future comment/paste actions route correctly without anyone having to set it by hand. If neither channel finds a match, `Parent Language` is left blank rather than guessed. Rows that already have a channel or language configured are checked on that single channel only, unchanged from before.
+
+```powershell
+.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --start-row 2 --end-row 10 --mode paste-only --action check-group-chat
+```
+
+The frontend has the same action as the **Check group chat status** button next to **Paste comments**.
 
 ## Options
 

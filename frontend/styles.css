@@ -187,6 +187,39 @@ h2 {
   border-bottom-color: var(--teal);
 }
 
+.sheet-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  padding-left: 12px;
+}
+
+.sheet-nav .sheet-tabs {
+  flex: 1 1 auto;
+  border-bottom: 0;
+  padding: 0 6px;
+}
+
+.semester-select {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 4px 10px;
+  color: var(--teal-dark);
+  background: var(--surface-muted);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  outline: none;
+}
+
+.semester-select:focus {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.13);
+}
+
 .workspace {
   display: grid;
   min-height: calc(100vh - 123px);
@@ -835,6 +868,97 @@ thead th:nth-child(-n+3) {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+.import-workspace {
+  overflow-y: auto;
+}
+
+.import-panel {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 0 24px 40px;
+}
+
+.import-intro {
+  margin: 16px 0 20px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.import-form {
+  display: flex;
+  align-items: end;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 16px;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.import-form .field {
+  min-width: 240px;
+  flex: 1 1 240px;
+}
+
+.import-empty {
+  margin-top: 18px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.import-plan {
+  margin-top: 22px;
+}
+
+.import-plan-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.import-plan-header strong {
+  font-size: 14px;
+}
+
+.import-classes {
+  display: grid;
+  gap: 8px;
+}
+
+.import-class {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.import-class input[type="checkbox"] {
+  margin-top: 3px;
+}
+
+.import-class div {
+  display: grid;
+  gap: 2px;
+}
+
+.import-class strong {
+  font-size: 13px;
+}
+
+.import-class span {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 @media (max-width: 1120px) {

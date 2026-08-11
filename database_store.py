@@ -116,6 +116,43 @@ def announcement_filename(sheet_name: str) -> str:
     return f"{stem}.txt"
 
 
+INVALID_SHEET_CHARS = re.compile(r"[\\/*?:\[\]]")
+MAX_SHEET_NAME_LENGTH = 31
+
+
+def safe_sheet_name(raw_name: str, weekly_time: str, existing: set[str]) -> str:
+    """Derive a valid, unique Excel worksheet title from a platform class name.
+
+    Excel sheet titles cannot contain [ ] : * ? / \\ and are capped at 31 characters,
+    but platform class names routinely violate both (e.g. "[In Person Cupertino DA]
+    2026-27 School Year Geometry V1+V2 Honors Sun"). The boilerplate venue-bracket
+    prefix and "YYYY-YY School Year" segment carry no distinguishing information, so
+    they're stripped first; the weekly-time's leading day token is kept as an explicit
+    suffix since it's usually what actually distinguishes sibling sections.
+    """
+    stripped = re.sub(r"^\[[^\]]*\]\s*", "", raw_name)
+    stripped = re.sub(r"^\d{4}-\d{2}\s+School Year\s+", "", stripped)
+    cleaned = INVALID_SHEET_CHARS.sub("", stripped)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip() or INVALID_SHEET_CHARS.sub("", raw_name).strip()
+
+    day = INVALID_SHEET_CHARS.sub("", (weekly_time.split()[0] if weekly_time else "")).strip()
+    base = cleaned
+    if day and base.endswith(day):
+        base = base[: -len(day)].rstrip()
+
+    suffix = f" {day}" if day else ""
+    budget = max(MAX_SHEET_NAME_LENGTH - len(suffix), 1)
+    base = base[:budget].rstrip()
+    candidate = f"{base}{suffix}".strip()[:MAX_SHEET_NAME_LENGTH] or (day or "Class")
+
+    original, attempt = candidate, 2
+    while candidate in existing:
+        marker = f" ({attempt})"
+        candidate = f"{original[: MAX_SHEET_NAME_LENGTH - len(marker)]}{marker}"
+        attempt += 1
+    return candidate
+
+
 def column_group(header: str) -> str:
     lowered = header.lower().replace(" ", "")
     if header in STUDENT_COLUMNS:
@@ -215,6 +252,12 @@ class SQLiteFeedbackStore:
                     value TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS semesters (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    position INTEGER NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS classes (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL UNIQUE,
@@ -245,6 +288,7 @@ class SQLiteFeedbackStore:
                 ON students(class_id, position);
                 """
             )
+            self._migrate_classes_table(connection)
             class_count = connection.execute("SELECT COUNT(*) FROM classes").fetchone()[0]
             if class_count == 0:
                 if not self.source_workbook_path.exists():
@@ -266,6 +310,23 @@ class SQLiteFeedbackStore:
                     "INSERT OR REPLACE INTO meta(key, value) VALUES('import_source', ?)",
                     (str(self.source_workbook_path),),
                 )
+
+    @staticmethod
+    def _table_columns(connection: sqlite3.Connection, table_name: str) -> set[str]:
+        rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+        return {str(row["name"]) for row in rows}
+
+    def _migrate_classes_table(self, connection: sqlite3.Connection) -> None:
+        existing = self._table_columns(connection, "classes")
+        additions = {
+            "semester_id": "INTEGER REFERENCES semesters(id)",
+            "external_class_id": "TEXT",
+            "weekly_time": "TEXT",
+            "subject": "TEXT",
+        }
+        for column_name, definition in additions.items():
+            if column_name not in existing:
+                connection.execute(f"ALTER TABLE classes ADD COLUMN {column_name} {definition}")
 
     def _import_workbook(self, connection: sqlite3.Connection) -> None:
         workbook = load_workbook(self.source_workbook_path, data_only=False)
@@ -362,6 +423,223 @@ class SQLiteFeedbackStore:
                 "SELECT name FROM classes ORDER BY position"
             ).fetchall()
             return [str(row["name"]) for row in rows]
+
+    def list_semesters(self) -> list[dict[str, Any]]:
+        with self.lock, self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id, name FROM semesters ORDER BY position"
+            ).fetchall()
+            return [{"id": int(row["id"]), "name": str(row["name"])} for row in rows]
+
+    def sheet_groups(self) -> list[dict[str, Any]]:
+        """Class sheet names grouped into semester blocks, in position order.
+
+        Classes imported before semesters existed (semester_id is NULL) are grouped
+        together under an "Other Classes" block, listed first.
+        """
+        with self.lock, self._connect() as connection:
+            semester_names = {
+                int(row["id"]): str(row["name"])
+                for row in connection.execute("SELECT id, name FROM semesters").fetchall()
+            }
+            class_rows = connection.execute(
+                "SELECT name, position, semester_id FROM classes ORDER BY position"
+            ).fetchall()
+
+        groups: list[dict[str, Any]] = []
+        group_index: dict[int | None, int] = {}
+        for row in class_rows:
+            raw_semester_id = row["semester_id"]
+            key = int(raw_semester_id) if raw_semester_id is not None else None
+            if key not in group_index:
+                group_index[key] = len(groups)
+                label = semester_names.get(key, "") if key is not None else "Other Classes"
+                groups.append({"semester": label, "sheets": []})
+            groups[group_index[key]]["sheets"].append(str(row["name"]))
+        return groups
+
+    def _default_column_template(self, connection: sqlite3.Connection) -> list[tuple[str, float]]:
+        row = connection.execute("SELECT id FROM classes ORDER BY position LIMIT 1").fetchone()
+        if row is None:
+            return [
+                ("First Name", 13.0),
+                ("Last Name", 13.0),
+                ("uid", 13.0),
+                ("Group Chat", 13.0),
+                ("Parent Language", 13.0),
+                ("Feedback", 40.0),
+            ]
+        return [(str(c["name"]), float(c["width"])) for c in self._columns(connection, int(row["id"]))]
+
+    def _plan_import(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        semester_name: str,
+        class_groups: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        semester_row = connection.execute(
+            "SELECT id FROM semesters WHERE name = ?", (semester_name,)
+        ).fetchone()
+        semester_exists = semester_row is not None
+        plan: dict[str, Any] = {
+            "semester": semester_name,
+            "semester_exists": semester_exists,
+            "classes": [],
+        }
+        for group in class_groups:
+            class_row = None
+            if semester_exists:
+                class_row = connection.execute(
+                    "SELECT id FROM classes WHERE semester_id = ? AND external_class_id = ?",
+                    (int(semester_row["id"]), group["external_class_id"]),
+                ).fetchone()
+
+            existing_uids: set[str] = set()
+            if class_row is not None:
+                for student in self._students(connection, int(class_row["id"])):
+                    values = json.loads(str(student["values_json"]))
+                    uid = str(values.get("uid") or "").strip()
+                    if uid:
+                        existing_uids.add(uid)
+
+            class_plan = {
+                "name": group["name"],
+                "external_class_id": group["external_class_id"],
+                "weekly_time": group.get("weekly_time", ""),
+                "subject": group.get("subject", ""),
+                "class_exists": class_row is not None,
+                "students": [
+                    {
+                        "uid": str(student["uid"]).strip(),
+                        "first_name": student["first_name"],
+                        "last_name": student["last_name"],
+                        "already_present": str(student["uid"]).strip() in existing_uids,
+                    }
+                    for student in group["students"]
+                ],
+            }
+            plan["classes"].append(class_plan)
+        return plan
+
+    def import_students(
+        self,
+        *,
+        semester_name: str,
+        class_groups: list[dict[str, Any]],
+        commit: bool = False,
+    ) -> dict[str, Any]:
+        """Import enrollment data grouped by platform class, under a named semester block.
+
+        Each entry in class_groups is expected to look like:
+        {
+            "external_class_id": str, "name": str, "weekly_time": str, "subject": str,
+            "students": [{"uid": str, "first_name": str, "last_name": str, "in_group": bool | None}, ...],
+        }
+        A semester is created if semester_name doesn't exist yet, otherwise reused. Within a
+        semester, a class is matched by external_class_id and created if missing. Students are
+        matched by uid within their class; existing students are left untouched and only new
+        uids are inserted, so re-running an import (or importing one new class at a time) is safe.
+        With commit=False (the default) nothing is written; the same plan that would be applied
+        is returned so callers can preview it first.
+        """
+        with self.lock, self._connect() as connection:
+            plan = self._plan_import(connection, semester_name=semester_name, class_groups=class_groups)
+            if not commit:
+                connection.rollback()
+                return plan
+
+            semester_row = connection.execute(
+                "SELECT id FROM semesters WHERE name = ?", (semester_name,)
+            ).fetchone()
+            if semester_row is None:
+                position = connection.execute(
+                    "SELECT COALESCE(MAX(position), -1) + 1 FROM semesters"
+                ).fetchone()[0]
+                cursor = connection.execute(
+                    "INSERT INTO semesters(name, position) VALUES (?, ?)",
+                    (semester_name, position),
+                )
+                semester_id = int(cursor.lastrowid)
+            else:
+                semester_id = int(semester_row["id"])
+
+            template_columns = self._default_column_template(connection)
+            created_new_class = False
+            existing_names = {
+                str(row["name"]) for row in connection.execute("SELECT name FROM classes").fetchall()
+            }
+
+            for group in class_groups:
+                class_row = connection.execute(
+                    "SELECT id FROM classes WHERE semester_id = ? AND external_class_id = ?",
+                    (semester_id, group["external_class_id"]),
+                ).fetchone()
+                if class_row is None:
+                    created_new_class = True
+                    position = connection.execute(
+                        "SELECT COALESCE(MAX(position), -1) + 1 FROM classes"
+                    ).fetchone()[0]
+                    sheet_name = safe_sheet_name(
+                        group["name"], group.get("weekly_time", ""), existing_names
+                    )
+                    existing_names.add(sheet_name)
+                    cursor = connection.execute(
+                        """
+                        INSERT INTO classes(name, position, semester_id, external_class_id, weekly_time, subject)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            sheet_name,
+                            position,
+                            semester_id,
+                            group["external_class_id"],
+                            group.get("weekly_time", ""),
+                            group.get("subject", ""),
+                        ),
+                    )
+                    class_id = int(cursor.lastrowid)
+                    for column_position, (column_name, width) in enumerate(template_columns):
+                        connection.execute(
+                            "INSERT INTO columns(class_id, name, position, width) VALUES (?, ?, ?, ?)",
+                            (class_id, column_name, column_position, width),
+                        )
+                else:
+                    class_id = int(class_row["id"])
+
+                existing_uids: set[str] = set()
+                for student in self._students(connection, class_id):
+                    values = json.loads(str(student["values_json"]))
+                    uid = str(values.get("uid") or "").strip()
+                    if uid:
+                        existing_uids.add(uid)
+
+                next_position = connection.execute(
+                    "SELECT COALESCE(MAX(position), -1) + 1 FROM students WHERE class_id = ?",
+                    (class_id,),
+                ).fetchone()[0]
+                for student in group["students"]:
+                    uid = str(student["uid"]).strip()
+                    if not uid or uid in existing_uids:
+                        continue
+                    values: dict[str, Any] = {
+                        "First Name": student["first_name"],
+                        "Last Name": student["last_name"],
+                        "uid": uid,
+                    }
+                    if student.get("in_group") is not None:
+                        values["Group Chat"] = bool(student["in_group"])
+                    connection.execute(
+                        "INSERT INTO students(id, class_id, position, values_json) VALUES (?, ?, ?, ?)",
+                        (str(uuid4()), class_id, next_position, json.dumps(values, ensure_ascii=False)),
+                    )
+                    existing_uids.add(uid)
+                    next_position += 1
+
+            if created_new_class:
+                self._create_template_from_database(connection)
+
+            return plan
 
     def announcement_path(self, sheet_name: str) -> Path:
         if sheet_name not in self.sheet_names():

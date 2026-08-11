@@ -65,6 +65,7 @@ def paste_job(*, channel: str = "wecom") -> PasteJob:
         uid="7916327",
         student_name="Emma Zhong",
         parent_language="Chinese",
+        language_explicit=True,
         channel=channel,
         channel_explicit=True,
         search_key="7916327",

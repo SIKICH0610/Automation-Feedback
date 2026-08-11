@@ -313,12 +313,16 @@
       state.view = view;
       elements.rosterView.hidden = view !== "roster";
       elements.quizBankView.hidden = view !== "quiz-banks";
+      if (elements.importView) elements.importView.hidden = view !== "import";
       document.querySelectorAll(".primary-tab").forEach((button) => {
         button.classList.toggle("is-active", button.dataset.view === view);
       });
       if (view === "quiz-banks" && !state.loaded) {
         setBusy(true, "Opening quiz banks", "Loading the feedback library.");
         await loadInitialBank();
+      }
+      if (view === "import") {
+        window.ImportStudentsView?.onShow?.();
       }
     } catch (error) {
       toast(error.message, true);
@@ -387,6 +391,7 @@
     [
       "rosterView",
       "quizBankView",
+      "importView",
       "quizBankList",
       "quizBankTitle",
       "bankEntryCount",

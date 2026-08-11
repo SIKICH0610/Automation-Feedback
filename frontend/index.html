@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/quiz_bank.css">
   <script src="/app.js" defer></script>
   <script src="/quiz_bank.js" defer></script>
+  <script src="/import_students.js" defer></script>
 </head>
 <body>
   <div class="app-shell">
@@ -26,10 +27,14 @@
     <nav class="primary-tabs" aria-label="Workspace">
       <button class="primary-tab is-active" data-view="roster" type="button">Students</button>
       <button class="primary-tab" data-view="quiz-banks" type="button">Quiz Banks</button>
+      <button class="primary-tab" data-view="import" type="button">Import Students</button>
     </nav>
 
     <div id="roster-view" class="view-panel">
-      <nav id="sheet-tabs" class="sheet-tabs" aria-label="Class sheets"></nav>
+      <div class="sheet-nav">
+        <select id="semester-select" class="semester-select" aria-label="Semester" hidden></select>
+        <nav id="sheet-tabs" class="sheet-tabs" aria-label="Class sheets"></nav>
+      </div>
 
       <main class="workspace">
         <section class="roster-panel" aria-labelledby="roster-title">
@@ -136,6 +141,10 @@
                 <span>Paste comments</span>
                 <small>Student-specific text</small>
               </button>
+              <button class="action-button paste" data-action="check-group-chat" type="button">
+                <span>Check group chat status</span>
+                <small>Updates Group Chat column</small>
+              </button>
             </div>
 
             <div class="action-group">
@@ -214,6 +223,45 @@
         <div id="quiz-bank-entries" class="quiz-bank-entries"></div>
         <div id="quiz-bank-empty" class="bank-empty-state" hidden>
           No questions in this bank.
+        </div>
+      </main>
+    </section>
+
+    <section id="import-view" class="import-workspace view-panel" hidden>
+      <main class="import-panel">
+        <div class="panel-toolbar">
+          <div>
+            <p class="eyebrow">Bulk roster import</p>
+            <h2>Import Students</h2>
+          </div>
+        </div>
+
+        <p class="import-intro">
+          Import a platform enrollment export (.xlsx). Only paid, enrolled rows are imported.
+          Type a new semester name to create it, or pick an existing one to add classes into it.
+        </p>
+
+        <div class="import-form">
+          <label class="field">
+            <span>Enrollment export file (.xlsx)</span>
+            <input id="import-file" type="file" accept=".xlsx">
+          </label>
+          <label class="field">
+            <span>Semester</span>
+            <input id="import-semester" type="text" list="import-semester-options" placeholder="e.g. 2026-27 School Year" autocomplete="off">
+            <datalist id="import-semester-options"></datalist>
+          </label>
+          <button id="import-preview" class="button secondary" type="button">Preview</button>
+        </div>
+
+        <p id="import-empty" class="import-empty">Choose a file and semester, then preview before importing.</p>
+
+        <div id="import-plan" class="import-plan" hidden>
+          <div class="import-plan-header">
+            <strong id="import-semester-summary"></strong>
+            <button id="import-commit" class="button primary" type="button">Commit Import</button>
+          </div>
+          <div id="import-classes" class="import-classes"></div>
         </div>
       </main>
     </section>

@@ -229,9 +229,34 @@ async function deleteAttachment(attachment) {
     setBusy(false);
   }
 }
+function sheetGroups() {
+  return state.bootstrap.sheet_groups || [{ semester: "", sheets: state.bootstrap.sheets || [] }];
+}
+
+function activeGroupIndex(groups) {
+  const index = groups.findIndex((group) => group.sheets.includes(state.sheetName));
+  return index === -1 ? 0 : index;
+}
+
 function renderTabs() {
+  const groups = sheetGroups();
+  const groupIndex = activeGroupIndex(groups);
+
+  elements.semesterSelect.hidden = groups.length <= 1;
+  if (groups.length > 1) {
+    elements.semesterSelect.replaceChildren(
+      ...groups.map((group, index) => {
+        const option = document.createElement("option");
+        option.value = String(index);
+        option.textContent = group.semester || "Other Classes";
+        return option;
+      })
+    );
+    elements.semesterSelect.value = String(groupIndex);
+  }
+
   elements.sheetTabs.replaceChildren();
-  state.bootstrap.sheets.forEach((sheetName) => {
+  groups[groupIndex].sheets.forEach((sheetName) => {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `sheet-tab${sheetName === state.sheetName ? " is-active" : ""}`;
@@ -239,6 +264,14 @@ function renderTabs() {
     button.addEventListener("click", () => switchSheet(sheetName));
     elements.sheetTabs.appendChild(button);
   });
+}
+
+async function switchSemester(groupIndex) {
+  const groups = sheetGroups();
+  const group = groups[Number(groupIndex)];
+  if (!group || !group.sheets.length) return;
+  if (group.sheets.includes(state.sheetName)) return;
+  await switchSheet(group.sheets[0]);
 }
 
 function visibleColumns() {
@@ -681,6 +714,8 @@ function selectedActionRows() {
 
 async function runAction(action) {
   const isPaste = action.startsWith("paste-");
+  const isGroupChatCheck = action === "check-group-chat";
+  const usesDesktopApp = isPaste || isGroupChatCheck;
   const selectedCount = state.rows.filter((row) => state.selected.has(rowKey(row))).length;
   const attachmentIds = action === "paste-announcement" ? selectedAttachmentIds() : [];
   if (isPaste && attachmentIds.length && selectedCount !== 1) {
@@ -700,8 +735,8 @@ async function runAction(action) {
   try {
     setBusy(
       true,
-      isPaste ? "Supervised paste running" : "Generating feedback",
-      isPaste ? "Keep WeCom and WhatsApp available." : "Writing results into the database."
+      isPaste ? "Supervised paste running" : isGroupChatCheck ? "Checking group chats" : "Generating feedback",
+      usesDesktopApp ? "Keep WeCom and WhatsApp available." : "Writing results into the database."
     );
     setSaveState("Working", "neutral");
     await saveAll({ quiet: true });
@@ -740,6 +775,9 @@ async function runAction(action) {
 }
 
 function bindEvents() {
+  elements.semesterSelect.addEventListener("change", () => {
+    switchSemester(elements.semesterSelect.value);
+  });
   elements.columnView.addEventListener("change", () => {
     state.columnView = elements.columnView.value;
     renderTable();
@@ -832,6 +870,7 @@ async function initialize() {
   [
     "databasePath",
     "saveState",
+    "semesterSelect",
     "sheetTabs",
     "columnView",
     "studentSearch",

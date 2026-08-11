@@ -44,7 +44,8 @@ PREFERRED_CHANNEL_COLUMN = "Preferred Channel"
 WHATSAPP_PHONE_COLUMN = "WhatsApp Phone"
 WHATSAPP_SEARCH_KEY_COLUMN = "WhatsApp Search Key"
 WHATSAPP_TARGET_TYPE_COLUMN = "WhatsApp Target Type"
-PASTE_ACTION_CHOICES = ("comment", "mass-notification")
+PASTE_ACTION_CHOICES = ("comment", "mass-notification", "check-group-chat")
+GROUP_CHAT_COLUMN = "Group Chat"
 
 
 @dataclass
@@ -78,6 +79,7 @@ class PasteJob:
     uid: str
     student_name: str
     parent_language: str
+    language_explicit: bool
     channel: str
     channel_explicit: bool
     search_key: str
@@ -455,6 +457,24 @@ def write_job_status(
     workbook.close()
 
 
+def write_group_chat_status(
+    workbook_path: Path,
+    sheet_name: str,
+    row_number: int,
+    *,
+    found: bool,
+    parent_language: str | None = None,
+) -> None:
+    workbook = load_workbook(workbook_path)
+    worksheet = workbook[sheet_name]
+    headers = header_values(worksheet)
+    set_status_value(worksheet, headers, row_number, GROUP_CHAT_COLUMN, found)
+    if parent_language:
+        set_status_value(worksheet, headers, row_number, "Parent Language", parent_language)
+    workbook.save(workbook_path)
+    workbook.close()
+
+
 def payload_for_student(
     student: StudentRow,
     *,
@@ -468,6 +488,8 @@ def payload_for_student(
 ) -> str:
     if action == "mass-notification":
         return mass_notification_payload_for_student(student, mass_message=mass_message)
+    if action == "check-group-chat":
+        return ""
     return comment_payload_for_student(
         student,
         class_review=class_review,
@@ -507,6 +529,7 @@ def build_paste_job(
         uid=uid,
         student_name=student.full_name,
         parent_language=value_for(student, "Parent Language") or "English",
+        language_explicit=bool(value_for(student, "Parent Language")),
         channel=channel,
         channel_explicit=bool(normalize_channel(value_for(student, PREFERRED_CHANNEL_COLUMN))),
         search_key=build_search_key(student, channel, uid),
@@ -909,7 +932,9 @@ class WeComPasteRobot:
             return True, "verified_uid_and_name"
         if uid_ok:
             return True, "verified_uid_only"
-        return False, "uid_not_visible_after_search"
+        if name_ok:
+            return True, "verified_name_only"
+        return False, "uid_and_name_not_visible_after_search"
 
     def print_visible_text_debug(self, *, limit: int = 2000) -> None:
         text = self.visible_text()
@@ -1395,6 +1420,25 @@ def run_wecom_job(
         search_shortcut=args.search_shortcut,
     )
 
+    if job.action == "check-group-chat":
+        # WeCom's search-results dropdown does not reliably expose the uid to UI
+        # Automation, even for chats that definitely exist (verified against a student
+        # with a prior successful paste). Actually opening the result and reading the
+        # opened chat's content, exactly like a normal paste run does before pasting,
+        # is what's proven to work. Never pastes; just opens, verifies, and clears state.
+        try:
+            robot.open_chat_from_search(job, open_strategy=open_strategy_from_args(args))
+        except LookupError as exc:
+            robot.clear_search_state(job)
+            print(f"Group chat check: not_found ({exc})")
+            return JobResult(status="not_found")
+        verified, reason = robot.verify_chat(job)
+        print(f"Verification: {reason}")
+        robot.clear_search_state(job)
+        status = "verified" if verified else "not_found"
+        print(f"Group chat check: {status}")
+        return JobResult(status=status)
+
     if args.debug_search_results:
         robot.print_search_result_candidates(job)
         return JobResult(status="checked")
@@ -1433,6 +1477,35 @@ def run_whatsapp_job(
     app_spec: DesktopAppSpec,
     app_exe: Path | None,
 ) -> JobResult:
+    if job.action == "check-group-chat":
+        if job.whatsapp_target_type == "phone":
+            return JobResult(
+                status="needs_review",
+                error="Phone-target WhatsApp rows cannot be checked by search; verify manually.",
+            )
+        if not job.search_key:
+            return JobResult(
+                status="needs_review",
+                error="WhatsApp group_search needs WhatsApp Search Key or uid.",
+            )
+        ensure_desktop_ready(app_spec, app_exe=app_exe, no_auto_open=args.no_auto_open)
+        robot = WhatsAppPasteRobot(
+            title_re=args.whatsapp_title_re,
+            search_shortcut=args.whatsapp_search_shortcut,
+        )
+        try:
+            robot.open_chat_from_search(job)
+        except LookupError as exc:
+            robot.clear_search_state(job.search_key)
+            print(f"Group chat check: not_found ({exc})")
+            return JobResult(status="not_found")
+        verified, reason = robot.verify_chat(job)
+        print(f"Verification: {reason}")
+        robot.clear_search_state(job.search_key)
+        status = "verified" if verified else "not_found"
+        print(f"Group chat check: {status}")
+        return JobResult(status=status)
+
     if job.whatsapp_target_type == "phone":
         if not job.whatsapp_phone:
             raise LookupError("WhatsApp phone mode needs a WhatsApp Phone value.")
@@ -1552,12 +1625,37 @@ def run_job(
             time.sleep(0.2)
             clear_clipboard()
 
+    if job.action == "check-group-chat" and not job.channel_explicit and not job.language_explicit:
+        # Parent Language is unknown and nothing pins the channel. Most families here are
+        # Chinese-speaking, so check WeCom first; only fall back to WhatsApp if that misses.
+        wecom_result = attempt(replace(job, channel="wecom", search_key=job.uid))
+        if wecom_result.status == "verified":
+            return JobResult(status="verified_wecom_chinese")
+
+        whatsapp_search_key = job.search_key if job.channel == "whatsapp" else job.uid
+        whatsapp_result = attempt(
+            replace(job, channel="whatsapp", search_key=whatsapp_search_key, whatsapp_target_type="group_search")
+        )
+        if whatsapp_result.status == "verified":
+            return JobResult(status="verified_whatsapp_english")
+
+        if wecom_result.status == "failed" and whatsapp_result.status == "failed":
+            return JobResult(
+                status="needs_review",
+                error=(
+                    f"wecom: {wecom_result.error or wecom_result.status}; "
+                    f"whatsapp: {whatsapp_result.error or whatsapp_result.status}"
+                ),
+            )
+        return JobResult(status="not_found")
+
     result = attempt(job)
     can_fallback = (
         args.fallback_channel
         and not job.channel_explicit
         and job.whatsapp_target_type != "phone"
         and not result.pasted
+        and job.action != "check-group-chat"
     )
     if can_fallback:
         primary_error = result.error or result.status
@@ -1695,8 +1793,10 @@ def main(
         elif result.status == "failed":
             failed += 1
 
-        if should_write_status and (
-            result.pasted or result.status in {"needs_review", "skipped_absent", "failed"}
+        if (
+            should_write_status
+            and item.action != "check-group-chat"
+            and (result.pasted or result.status in {"needs_review", "skipped_absent", "failed"})
         ):
             write_job_status(
                 args.workbook,
@@ -1704,6 +1804,29 @@ def main(
                 item.excel_row,
                 status=result.status,
                 error=result.error,
+            )
+
+        group_chat_statuses = {
+            "verified": True,
+            "not_found": False,
+            "verified_wecom_chinese": True,
+            "verified_whatsapp_english": True,
+        }
+        inferred_language = {
+            "verified_wecom_chinese": "Chinese",
+            "verified_whatsapp_english": "English",
+        }
+        if (
+            not args.no_status_write
+            and item.action == "check-group-chat"
+            and result.status in group_chat_statuses
+        ):
+            write_group_chat_status(
+                args.workbook,
+                args.sheet,
+                item.excel_row,
+                found=group_chat_statuses[result.status],
+                parent_language=inferred_language.get(result.status),
             )
 
     if batch_mode:
