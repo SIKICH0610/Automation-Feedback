@@ -391,6 +391,21 @@ def clear_clipboard() -> None:
         pass
 
 
+def copy_text_to_clipboard(text: str, *, description: str) -> None:
+    try:
+        import pyperclip
+    except ImportError as exc:
+        raise RuntimeError("Install clipboard dependency first: python -m pip install pyperclip") from exc
+
+    for attempt in range(3):
+        pyperclip.copy(text)
+        time.sleep(0.1)
+        if pyperclip.paste() == text:
+            return
+        if attempt == 2:
+            raise RuntimeError(f"Could not copy {description} into the clipboard.")
+
+
 def timestamp() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
@@ -629,22 +644,26 @@ class WeComPasteRobot:
         self.settle_seconds = settle_seconds
         self.window: Any | None = None
 
-    def focus_window(self) -> Any:
+    def current_window(self) -> Any:
         if self.window is not None:
             try:
                 if self.window.exists(timeout=0.5):
-                    self.window.set_focus()
                     return self.window
             except Exception:
                 self.window = None
 
         window = self.desktop.window(title_re=self.title_re)
-        window.set_focus()
         self.window = window
         return window
 
-    def visible_text(self) -> str:
-        window = self.focus_window()
+    def focus_window(self) -> Any:
+        window = self.current_window()
+        window.set_focus()
+        return window
+
+    def visible_text(self, *, ignored_edit_values: set[str] | None = None) -> str:
+        window = self.current_window()
+        ignored_edit_values = ignored_edit_values or set()
         texts: list[str] = []
         try:
             title = window.window_text().strip()
@@ -665,27 +684,29 @@ class WeComPasteRobot:
         for element in window.descendants():
             try:
                 text = element.window_text().strip()
+                control_type = str(element.element_info.control_type or "")
+                class_name = str(element.element_info.class_name or "")
             except Exception:
+                continue
+            is_edit = control_type == "Edit" or "Edit" in class_name
+            if is_edit and text in ignored_edit_values:
                 continue
             if text:
                 texts.append(text)
         return "\n".join(texts)
 
     def search_chat(self, search_key: str) -> None:
-        try:
-            import pyperclip
-        except ImportError as exc:
-            raise RuntimeError("Install clipboard dependency first: python -m pip install pyperclip") from exc
-
         self.focus_window()
         self.send_keys(self.search_shortcut)
-        time.sleep(0.2)
-        pyperclip.copy(search_key)
+        time.sleep(0.3)
+        self.send_keys("^a")
+        self.send_keys("{BACKSPACE}")
+        copy_text_to_clipboard(search_key, description="the WeCom search key")
         self.send_keys("^v")
         time.sleep(self.settle_seconds)
 
     def search_result_candidates(self, job: PasteJob) -> list[tuple[int, Any, str]]:
-        window = self.focus_window()
+        window = self.current_window()
         name_parts = [part.lower() for part in job.student_name.split() if part]
         expected_chat_name = job.expected_chat_name.lower()
         elements: list[tuple[Any, str, Any]] = []
@@ -724,7 +745,7 @@ class WeComPasteRobot:
             expected_ok = bool(expected_chat_name and expected_chat_name in combined_lower)
             name_hits = sum(1 for part in name_parts if part in combined_lower)
 
-            has_identity_match = expected_ok or (uid_ok and name_hits > 0)
+            has_identity_match = expected_ok or uid_ok
             if not has_identity_match:
                 continue
 
@@ -745,7 +766,7 @@ class WeComPasteRobot:
         return candidates
 
     def search_input_element(self, search_key: str) -> Any | None:
-        window = self.focus_window()
+        window = self.current_window()
         for element in window.descendants():
             try:
                 control_type = str(element.element_info.control_type or "")
@@ -817,9 +838,22 @@ class WeComPasteRobot:
         self.send_keys("{ENTER}")
         time.sleep(self.settle_seconds)
 
+    def wait_for_search_result_candidates(
+        self,
+        job: PasteJob,
+        *,
+        timeout: float = 3.0,
+    ) -> list[tuple[int, Any, str]]:
+        deadline = time.monotonic() + timeout
+        while True:
+            candidates = self.search_result_candidates(job)
+            if candidates or time.monotonic() >= deadline:
+                return candidates
+            time.sleep(0.2)
+
     def print_search_result_candidates(self, job: PasteJob) -> None:
         self.search_chat(job.search_key)
-        candidates = self.search_result_candidates(job)
+        candidates = self.wait_for_search_result_candidates(job)
         if not candidates:
             print("No matching group-chat candidates found in the search results.")
             return
@@ -836,37 +870,37 @@ class WeComPasteRobot:
             time.sleep(self.settle_seconds)
             return
 
-        if open_strategy == "enter":
-            self.send_keys("{ENTER}")
-            time.sleep(self.settle_seconds)
-            if self.search_is_active(job):
-                self.clear_search_state(job)
-                raise LookupError(f"WeCom group chat was not found for uid {job.uid}.")
-            return
-
+        candidates = self.search_result_candidates(job)
+        if candidates:
+            print(f"Matched WeCom search result: {candidates[0][2][:120]}")
+        else:
+            print("WeCom result was not exposed through UI Automation; opening with Enter.")
         if open_strategy == "keyboard":
             self.open_first_result_with_keyboard()
         elif open_strategy == "ui-control":
             if not self.open_best_result_with_uia(job):
                 self.clear_search_state(job)
-                raise LookupError(f"WeCom group chat was not found for uid {job.uid}.")
+                raise LookupError(f"WeCom group chat could not be opened for uid {job.uid}.")
         else:
             print("Opening first WeCom search result with Enter.")
             self.send_keys("{ENTER}")
             time.sleep(self.settle_seconds)
-            if self.search_is_active(job):
-                print("Enter did not open the result; using UI Automation fallback.")
-                if not self.open_best_result_with_uia(job):
-                    self.clear_search_state(job)
-                    raise LookupError(f"WeCom group chat was not found for uid {job.uid}.")
 
         if self.search_is_active(job):
-            self.clear_search_state(job)
-            raise LookupError(f"WeCom group chat was not found for uid {job.uid}.")
-        time.sleep(self.settle_seconds)
+            print("WeCom search is still active; pressing Enter again.")
+            self.send_keys("{ENTER}")
+            time.sleep(self.settle_seconds)
+
+        if self.search_is_active(job):
+            self.send_keys("{ESC}")
+            time.sleep(0.2)
+            verified, _ = self.verify_chat(job)
+            if not verified:
+                self.clear_search_state(job)
+                raise LookupError(f"WeCom group chat could not be opened for uid {job.uid}.")
 
     def verify_chat(self, job: PasteJob) -> tuple[bool, str]:
-        text = self.visible_text()
+        text = self.visible_text(ignored_edit_values={job.search_key})
         uid_ok = job.uid in text
         name_parts = [part for part in job.student_name.split() if part]
         name_ok = any(part in text for part in name_parts)
@@ -883,7 +917,7 @@ class WeComPasteRobot:
         print(text[:limit] if text else "(no visible text captured)")
 
     def focus_message_input(self) -> bool:
-        window = self.focus_window()
+        window = self.current_window()
         candidates: list[tuple[int, Any]] = []
 
         for element in window.descendants():
@@ -918,18 +952,10 @@ class WeComPasteRobot:
         return False
 
     def paste_feedback(self, feedback: str) -> None:
-        try:
-            import pyperclip
-        except ImportError as exc:
-            raise RuntimeError("Install clipboard dependency first: python -m pip install pyperclip") from exc
-
-        if not self.focus_message_input():
-            print("Could not focus the WeCom message input box by UI Automation; pasting into the active WeCom chat.")
-            self.focus_window()
-
-        pyperclip.copy(feedback)
+        copy_text_to_clipboard(feedback, description="the WeCom feedback")
+        print(f"Clipboard loaded with feedback ({len(feedback)} characters).")
         self.send_keys("^v")
-        time.sleep(0.8)
+        time.sleep(1.2)
 
 
 class WhatsAppPasteRobot:
@@ -956,11 +982,10 @@ class WhatsAppPasteRobot:
         self.settle_seconds = settle_seconds
         self.window: Any | None = None
 
-    def focus_window(self) -> Any:
+    def current_window(self) -> Any:
         if self.window is not None:
             try:
                 if self.window.exists(timeout=0.5):
-                    self.window.set_focus()
                     return self.window
             except Exception:
                 self.window = None
@@ -968,12 +993,17 @@ class WhatsAppPasteRobot:
         window = find_window_by_title_re(self.title_re)
         if window is None:
             raise RuntimeError(f"Could not find WhatsApp window with title pattern: {self.title_re}")
-        window.set_focus()
         self.window = window
         return window
 
-    def visible_text(self) -> str:
-        window = self.focus_window()
+    def focus_window(self) -> Any:
+        window = self.current_window()
+        window.set_focus()
+        return window
+
+    def visible_text(self, *, ignored_edit_values: set[str] | None = None) -> str:
+        window = self.current_window()
+        ignored_edit_values = ignored_edit_values or set()
         texts: list[str] = []
         try:
             title = window.window_text().strip()
@@ -984,7 +1014,12 @@ class WhatsAppPasteRobot:
         for element in window.descendants():
             try:
                 text = element.window_text().strip()
+                control_type = str(element.element_info.control_type or "")
+                class_name = str(element.element_info.class_name or "")
             except Exception:
+                continue
+            is_edit = control_type == "Edit" or "Edit" in class_name
+            if is_edit and text in ignored_edit_values:
                 continue
             if text:
                 texts.append(text)
@@ -999,23 +1034,19 @@ class WhatsAppPasteRobot:
         time.sleep(3)
 
     def search_chat(self, search_key: str) -> None:
-        try:
-            import pyperclip
-        except ImportError as exc:
-            raise RuntimeError("Install clipboard dependency first: python -m pip install pyperclip") from exc
-
         self.focus_window()
         self.send_keys("{ESC}")
         time.sleep(0.1)
-        pyperclip.copy(search_key)
         self.send_keys(self.search_shortcut)
         time.sleep(0.3)
         self.send_keys("^a")
+        self.send_keys("{BACKSPACE}")
+        copy_text_to_clipboard(search_key, description="the WhatsApp search key")
         self.send_keys("^v")
         time.sleep(self.settle_seconds)
 
     def search_input_element(self, search_key: str) -> Any | None:
-        window = self.focus_window()
+        window = self.current_window()
         for element in window.descendants():
             try:
                 control_type = str(element.element_info.control_type or "")
@@ -1048,9 +1079,17 @@ class WhatsAppPasteRobot:
 
     def clear_search_state(self, search_key: str) -> None:
         try:
-            self.focus_window()
-            self.send_keys(self.search_shortcut)
-            time.sleep(0.2)
+            search_input = self.search_input_element(search_key)
+            if search_input is not None:
+                try:
+                    search_input.set_focus()
+                    time.sleep(0.1)
+                except Exception:
+                    pass
+            else:
+                self.focus_window()
+                self.send_keys(self.search_shortcut)
+                time.sleep(0.2)
             self.send_keys("^a")
             time.sleep(0.05)
             self.send_keys("{BACKSPACE}")
@@ -1060,14 +1099,47 @@ class WhatsAppPasteRobot:
         except Exception:
             pass
 
-    def open_chat_from_search(self, search_key: str) -> None:
-        self.search_chat(search_key)
-        print("Opening WhatsApp search result with Enter.")
+    def search_result_matches(self, job: PasteJob) -> bool:
+        text = self.visible_text(ignored_edit_values={job.search_key}).lower()
+        search_key = job.search_key.lower()
+        uid_ok = bool(job.uid and job.uid.lower() in text)
+        search_ok = bool(search_key and search_key in text)
+        name_parts = [part.lower() for part in job.student_name.split() if part]
+        name_ok = any(part in text for part in name_parts)
+        return search_ok or (uid_ok and name_ok)
+
+    def wait_for_search_result(self, job: PasteJob, *, timeout: float = 3.0) -> bool:
+        deadline = time.monotonic() + timeout
+        while True:
+            if self.search_result_matches(job):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.2)
+
+    def open_chat_from_search(self, job: PasteJob) -> None:
+        self.search_chat(job.search_key)
+        matched_result = self.search_result_matches(job)
+        if matched_result:
+            print("Opening matched WhatsApp search result with Enter.")
+        else:
+            print("WhatsApp result was not exposed through UI Automation; opening with Enter.")
         self.send_keys("{ENTER}")
         time.sleep(self.settle_seconds)
-        if self.search_is_active(search_key):
-            self.clear_search_state(search_key)
-            raise LookupError(f"WhatsApp chat was not found for search key {search_key!r}.")
+        if self.search_is_active(job.search_key):
+            print("WhatsApp search is still active; pressing Enter again.")
+            self.send_keys("{ENTER}")
+            time.sleep(self.settle_seconds)
+
+        if self.search_is_active(job.search_key):
+            self.send_keys("{ESC}")
+            time.sleep(0.2)
+            verified, _ = self.verify_chat(job)
+            if not verified:
+                self.clear_search_state(job.search_key)
+                raise LookupError(
+                    f"WhatsApp chat could not be opened for search key {job.search_key!r}."
+                )
 
     def close_search_overlay(self) -> None:
         try:
@@ -1077,7 +1149,7 @@ class WhatsAppPasteRobot:
             pass
 
     def verify_chat(self, job: PasteJob) -> tuple[bool, str]:
-        text = self.visible_text()
+        text = self.visible_text(ignored_edit_values={job.search_key})
         uid_ok = bool(job.uid and job.uid in text)
         search_ok = bool(job.search_key and job.search_key in text)
         name_parts = [part for part in job.student_name.split() if part]
@@ -1090,20 +1162,8 @@ class WhatsAppPasteRobot:
         return False, "whatsapp_target_not_visible"
 
     def paste_feedback(self, feedback: str) -> None:
-        try:
-            import pyperclip
-        except ImportError as exc:
-            raise RuntimeError("Install clipboard dependency first: python -m pip install pyperclip") from exc
-
-        for attempt in range(3):
-            pyperclip.copy(feedback)
-            time.sleep(0.2)
-            if pyperclip.paste() == feedback:
-                print(f"Clipboard loaded with feedback ({len(feedback)} characters).")
-                break
-            if attempt == 2:
-                raise RuntimeError("Could not copy feedback text into the clipboard.")
-
+        copy_text_to_clipboard(feedback, description="the WhatsApp feedback")
+        print(f"Clipboard loaded with feedback ({len(feedback)} characters).")
         self.send_keys("^v")
         time.sleep(1.5)
 
@@ -1348,10 +1408,6 @@ def run_wecom_job(
         robot.clear_search_state(job)
         raise
 
-    if robot.search_is_active(job):
-        robot.clear_search_state(job)
-        raise LookupError(f"WeCom group chat was not found for uid {job.uid}.")
-
     verified, reason = robot.verify_chat(job)
     print(f"Verification: {reason}")
     if not verified:
@@ -1363,8 +1419,6 @@ def run_wecom_job(
     if job.feedback:
         robot.paste_feedback(job.feedback)
     if args.attachments:
-        if not job.feedback and not robot.focus_message_input():
-            robot.focus_window()
         stage_attachments(args.attachments, send_keys=robot.send_keys)
     else:
         robot.clear_search_state(job)
@@ -1406,7 +1460,7 @@ def run_whatsapp_job(
         search_shortcut=args.whatsapp_search_shortcut,
     )
     try:
-        robot.open_chat_from_search(job.search_key)
+        robot.open_chat_from_search(job)
     except Exception:
         robot.clear_search_state(job.search_key)
         raise
