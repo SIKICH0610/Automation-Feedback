@@ -1410,16 +1410,31 @@ def ensure_desktop_ready(
 # A real WeCom search result adds a result row (avatar + title + subtitle + timestamp)
 # above the "Search for mobile number/email online: ..." suggestion that WeCom shows no
 # matter what you search, match or not -- so the dropdown is reliably taller when there is
-# a real match than when there isn't. Calibrated against real data on a 1280x948 window:
-# a genuine match measured ~33% of window height, a confirmed non-match ~21%. Expressed as
-# a fraction of window height (not raw pixels) so it isn't tied to one screen resolution.
-WECOM_MATCH_HEIGHT_FRACTION = 0.26
+# a real match than when there isn't. That dropdown turns out to be a fixed pixel size
+# that does NOT scale with the window (confirmed by resizing a real window and remeasuring:
+# a match stayed exactly 309px tall whether the window was 948px or 650px tall), so neither
+# a raw pixel threshold nor a fraction-of-window-height threshold is portable across
+# different window sizes or, likely, different display DPI scaling on other computers.
+# Comparing against a live-measured baseline instead of any hardcoded number sidesteps
+# both problems: whatever the current window size or DPI is, it affects the baseline
+# (guaranteed no-match) measurement and a real match's measurement the same way, so their
+# ratio should hold steady even though the absolute pixel values wouldn't.
+WECOM_MATCH_HEIGHT_RATIO = 1.3  # a match's dropdown must be at least this much taller than baseline
+# WeCom's dropdown renders differently depending on whether the search text even looks like
+# a phone number/uid, independent of whether anything matched (confirmed: a non-numeric
+# baseline string measured 135px, a numeric non-matching uid measured 199px, at the same
+# window size) -- so the baseline has to be numeric, the same shape as a real uid, or it
+# isn't a fair comparison. "0000000" is a 7-digit number matching real uid length/format
+# but far outside the range any of this org's real uids have used (which start with 7 or 8).
+WECOM_BASELINE_SEARCH_KEY = "0000000"
+
+_wecom_baseline_height_cache: int | None = None
 
 
-def _search_dropdown_height_fraction(robot: "WeComPasteRobot", search_key: str) -> tuple[float, int]:
+def _wecom_dropdown_height(robot: "WeComPasteRobot", search_key: str) -> int:
     """Type search_key into WeCom's already-focused, already-empty search box and measure
-    how tall the resulting dropdown is, as a fraction of the window's height, by diffing
-    screenshots taken immediately before and after. Returns (fraction, height_px).
+    how tall the resulting dropdown is, in pixels, by diffing screenshots taken immediately
+    before and after. Assumes the search box is already open and empty.
 
     This deliberately does not read any text on screen: UI Automation exposes nothing for
     WeCom (it draws its own UI rather than using real controls), and OCR text matching was
@@ -1435,7 +1450,6 @@ def _search_dropdown_height_fraction(robot: "WeComPasteRobot", search_key: str) 
     window = robot.current_window()
     rectangle = window.rectangle()
     bbox = (rectangle.left, rectangle.top, rectangle.right, rectangle.bottom)
-    window_height = rectangle.bottom - rectangle.top
 
     before = ImageGrab.grab(bbox=bbox)
     copy_text_to_clipboard(search_key, description="the WeCom search key")
@@ -1445,9 +1459,25 @@ def _search_dropdown_height_fraction(robot: "WeComPasteRobot", search_key: str) 
 
     diff = ImageChops.difference(before.convert("RGB"), after.convert("RGB"))
     box = diff.getbbox()
-    height = (box[3] - box[1]) if box else 0
-    fraction = (height / window_height) if window_height else 0.0
-    return fraction, height
+    return (box[3] - box[1]) if box else 0
+
+
+def _clear_wecom_search_box(robot: "WeComPasteRobot") -> None:
+    robot.send_keys("^a")
+    robot.send_keys("{BACKSPACE}")
+
+
+def _wecom_no_match_baseline(robot: "WeComPasteRobot") -> int:
+    """The dropdown height WeCom shows for a uid that certainly doesn't exist, measured
+    once per process run and cached -- self-calibrates to whatever this run's actual
+    window size and display DPI are, instead of assuming a fixed number will transfer
+    from the machine this was developed on to whichever machine actually runs it.
+    """
+    global _wecom_baseline_height_cache
+    if _wecom_baseline_height_cache is None:
+        _wecom_baseline_height_cache = _wecom_dropdown_height(robot, WECOM_BASELINE_SEARCH_KEY)
+        _clear_wecom_search_box(robot)
+    return _wecom_baseline_height_cache
 
 
 def run_wecom_job(
@@ -1465,20 +1495,21 @@ def run_wecom_job(
 
     if job.action == "check-group-chat":
         # Always searches by uid only, never by name. Never opens a chat -- just measures
-        # the search dropdown's height; see _search_dropdown_height_fraction for why.
+        # the search dropdown's height against a live-measured baseline; see
+        # _wecom_dropdown_height and _wecom_no_match_baseline for why.
         robot.focus_window()
         robot.send_keys(robot.search_shortcut)
         time.sleep(0.3)
-        robot.send_keys("^a")
-        robot.send_keys("{BACKSPACE}")
+        _clear_wecom_search_box(robot)
         time.sleep(0.2)
-        fraction, height = _search_dropdown_height_fraction(robot, job.search_key)
-        robot.send_keys("^a")
-        robot.send_keys("{BACKSPACE}")
-        verified = fraction >= WECOM_MATCH_HEIGHT_FRACTION
+        baseline = _wecom_no_match_baseline(robot)
+        height = _wecom_dropdown_height(robot, job.search_key)
+        _clear_wecom_search_box(robot)
+        threshold = baseline * WECOM_MATCH_HEIGHT_RATIO
+        verified = height > threshold
         print(
             f"Verification: dropdown height {height}px "
-            f"({fraction:.0%} of window, threshold {WECOM_MATCH_HEIGHT_FRACTION:.0%})"
+            f"(baseline {baseline}px, threshold {threshold:.0f}px)"
         )
         status = "verified" if verified else "not_found"
         print(f"Group chat check: {status}")
