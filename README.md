@@ -287,6 +287,8 @@ python paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_revie
 
 For a row with no `Preferred Channel` and no `Parent Language` set (the common case for freshly imported students), the check searches WeCom first, since most families are Chinese-speaking; only if that finds nothing does it check WhatsApp. Whichever channel actually finds the chat also fills in `Parent Language` (`Chinese` for WeCom, `English` for WhatsApp), so future comment/paste actions route correctly without anyone having to set it by hand. If neither channel finds a match, `Parent Language` is left blank rather than guessed. Rows that already have a channel or language configured are checked on that single channel only, unchanged from before.
 
+**WeCom verification note:** WeCom renders its entire UI as custom-drawn graphics rather than real controls, so Windows' UI Automation exposes no readable text from it at all, regardless of what's on screen. Verification falls back to OCR (`screen_ocr.py`, using Windows' built-in OCR via the `winsdk` package) on a screenshot of the search results, which reads the same pixels a person would see. This requires an OCR language pack installed in Windows (Settings > Time & Language > Language) for whatever languages your students' chat names use; Chinese and English packs are common defaults. Because WeCom always echoes the raw search term back in a "Search for mobile number/email online: ..." suggestion even when nothing matches, a bare uid match isn't trusted on its own — OCR requires both the uid and the student's name to appear before treating a chat as verified.
+
 ```powershell
 .\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --start-row 2 --end-row 10 --mode paste-only --action check-group-chat
 ```

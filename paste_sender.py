@@ -15,6 +15,7 @@ from urllib.parse import quote
 
 from openpyxl import load_workbook
 
+import screen_ocr
 from feedback_common import (
     DEFAULT_SHEET,
     DEFAULT_WORKBOOK,
@@ -1407,6 +1408,47 @@ def ensure_desktop_ready(
     return status
 
 
+def _uid_or_name_match(text: str, job: PasteJob) -> tuple[bool, bool]:
+    uid_ok = bool(job.uid and job.uid in text)
+    name_parts = [part for part in job.student_name.split() if part]
+    name_ok = any(part in text for part in name_parts)
+    return uid_ok, name_ok
+
+
+def _match_reason(uid_ok: bool, name_ok: bool, *, prefix: str = "verified") -> str:
+    if uid_ok and name_ok:
+        return f"{prefix}_uid_and_name"
+    if uid_ok:
+        return f"{prefix}_uid_only"
+    return f"{prefix}_name_only"
+
+
+def _verify_with_ocr_fallback(window: Any, text: str, job: PasteJob) -> tuple[bool, str]:
+    """Check uid/name against already-scraped UI Automation text, falling back to OCR
+    on a screenshot when that text is empty. WeCom in particular renders its whole UI as
+    custom-drawn graphics, so UI Automation usually has nothing to scrape at all -- OCR
+    reads the same pixels a person would see instead.
+    """
+    uid_ok, name_ok = _uid_or_name_match(text, job)
+    if uid_ok or name_ok:
+        return True, _match_reason(uid_ok, name_ok)
+
+    try:
+        ocr_text = screen_ocr.capture_window_text(window)
+    except Exception as exc:
+        return False, f"ocr_failed: {type(exc).__name__}: {exc}"
+
+    # OCR reads the whole screen, including boilerplate like "Search for mobile
+    # number/email online: <search term>" that echoes the search term back even when
+    # there is no real match (confirmed against a search that genuinely finds nothing).
+    # A genuine result also shows the student's name, which that boilerplate never does,
+    # so OCR requires both signals together rather than trusting either alone.
+    uid_ok, name_ok = _uid_or_name_match(ocr_text, job)
+    if uid_ok and name_ok:
+        return True, "ocr_verified_uid_and_name"
+    return False, "not_visible_in_text_or_ocr"
+
+
 def run_wecom_job(
     job: PasteJob,
     *,
@@ -1421,20 +1463,17 @@ def run_wecom_job(
     )
 
     if job.action == "check-group-chat":
-        # WeCom's search-results dropdown does not reliably expose the uid to UI
-        # Automation, even for chats that definitely exist (verified against a student
-        # with a prior successful paste). Actually opening the result and reading the
-        # opened chat's content, exactly like a normal paste run does before pasting,
-        # is what's proven to work. Never pastes; just opens, verifies, and clears state.
-        try:
-            robot.open_chat_from_search(job, open_strategy=open_strategy_from_args(args))
-        except LookupError as exc:
-            robot.clear_search_state(job)
-            print(f"Group chat check: not_found ({exc})")
-            return JobResult(status="not_found")
-        verified, reason = robot.verify_chat(job)
-        print(f"Verification: {reason}")
+        # WeCom renders its whole UI as custom-drawn graphics ("GDI+ Window" per its own
+        # window class), so UI Automation exposes zero readable text no matter what's on
+        # screen or whether a chat is opened -- confirmed against a chat proven to exist
+        # by a prior successful paste. The uid/name are visibly on screen in the search
+        # results the moment you search, though, so this only searches (never opens) and
+        # falls back to OCR on a screenshot, which reads the same pixels a person would.
+        robot.search_chat(job.search_key)
+        text = robot.visible_text(ignored_edit_values={job.search_key})
+        verified, reason = _verify_with_ocr_fallback(robot.current_window(), text, job)
         robot.clear_search_state(job)
+        print(f"Verification: {reason}")
         status = "verified" if verified else "not_found"
         print(f"Group chat check: {status}")
         return JobResult(status=status)
@@ -1493,15 +1532,11 @@ def run_whatsapp_job(
             title_re=args.whatsapp_title_re,
             search_shortcut=args.whatsapp_search_shortcut,
         )
-        try:
-            robot.open_chat_from_search(job)
-        except LookupError as exc:
-            robot.clear_search_state(job.search_key)
-            print(f"Group chat check: not_found ({exc})")
-            return JobResult(status="not_found")
-        verified, reason = robot.verify_chat(job)
-        print(f"Verification: {reason}")
+        robot.search_chat(job.search_key)
+        text = robot.visible_text(ignored_edit_values={job.search_key})
+        verified, reason = _verify_with_ocr_fallback(robot.current_window(), text, job)
         robot.clear_search_state(job.search_key)
+        print(f"Verification: {reason}")
         status = "verified" if verified else "not_found"
         print(f"Group chat check: {status}")
         return JobResult(status=status)
