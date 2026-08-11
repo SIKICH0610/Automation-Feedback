@@ -510,6 +510,17 @@ class FrontendHandler(BaseHTTPRequestHandler):
                     },
                 )
                 return
+            if parsed.path == "/api/student/delete":
+                data = self.store.delete_student(
+                    str(payload.get("sheet") or ""),
+                    str(payload.get("student_id") or ""),
+                )
+                self._send_json(200, {"ok": True, "data": data})
+                return
+            if parsed.path == "/api/class/delete":
+                result = self.store.delete_class(str(payload.get("sheet") or ""))
+                self._send_json(200, {"ok": True, **result})
+                return
             if parsed.path == "/api/action":
                 result = self.runner.run(payload)
                 self._send_json(200 if result["ok"] else 422, result)

@@ -406,6 +406,16 @@ textarea:focus,
   border-color: #aebbb6;
 }
 
+.button.danger {
+  color: var(--red);
+  background: var(--red-soft);
+  border-color: transparent;
+}
+
+.button.danger:hover {
+  background: #f5d6d6;
+}
+
 .button.small {
   min-height: 30px;
   padding: 4px 10px;
@@ -512,6 +522,20 @@ td.row-number {
   text-align: center;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+}
+
+th.row-actions,
+td.row-actions {
+  width: 40px;
+  min-width: 40px;
+  max-width: 40px;
+  text-align: center;
+}
+
+td.row-actions .icon-button {
+  width: 26px;
+  height: 26px;
+  font-size: 16px;
 }
 
 th:nth-child(1),
