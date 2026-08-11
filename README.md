@@ -45,12 +45,32 @@ First-time setup on Windows:
 .\setup.ps1
 ```
 
-This creates a local `.venv` folder and installs the required packages there. VS Code is configured to use `.venv\Scripts\python.exe` for this workspace, so it will not accidentally use Python from another project.
+First-time setup on macOS:
+
+```bash
+./setup.sh
+```
+
+This creates a local `.venv` folder and installs the required packages there. VS Code is configured to use `.venv\Scripts\python.exe` on Windows or `.venv/bin/python` on macOS for this workspace, so it will not accidentally use Python from another project.
+
+WeCom paste automation and group-chat detection work on both Windows (`pywinauto`, skipped by `requirements.txt` on macOS since it's Windows-only) and macOS (`wecom_mac.py`, built on the Accessibility API via `osascript`/JXA instead). WhatsApp automation is still Windows-only for now; on macOS those rows come back `needs_review` instead of pasting. Everything else — the local frontend, SQLite roster, quiz banks, attachments, enrollment import, and feedback generation — runs the same on both platforms.
+
+**One-time macOS setup for WeCom paste automation**: the Python interpreter that runs `paste_sender.py` needs Accessibility permission to control WeCom. In **System Settings → Privacy & Security → Accessibility**, add the interpreter your `.venv` points at — find its real path with:
+
+```bash
+readlink -f .venv/bin/python
+```
+
+and add that exact path (not `.venv/bin/python` itself, which is a symlink). After granting the permission, **fully quit and restart the frontend server** (`Ctrl+C` then re-run `./.venv/bin/python frontend_server.py`) — a process already running before the permission was granted keeps using its old, unpermitted state, and Accessibility prompts otherwise fail silently with `osascript is not allowed assistive access`.
 
 Optional API key for GPT-assisted workflows:
 
 ```powershell
 $env:OPENAI_API_KEY="your_api_key_here"
+```
+
+```bash
+export OPENAI_API_KEY="your_api_key_here"
 ```
 
 ## Local frontend
@@ -59,6 +79,10 @@ Start the editable workbook interface:
 
 ```powershell
 .\.venv\Scripts\python.exe frontend_server.py
+```
+
+```bash
+./.venv/bin/python frontend_server.py
 ```
 
 The app opens at `http://127.0.0.1:8765`. Each class sheet has its own linked UTF-8 announcement file in `announcements`. The frontend saves student edits and uploaded images or documents into `app_data/feedback.db`, generates general or quiz feedback, and runs the supervised paste-only workflow for selected rows.

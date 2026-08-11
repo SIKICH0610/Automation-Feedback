@@ -364,7 +364,7 @@ class FrontendHandler(BaseHTTPRequestHandler):
                         "default_sheet": sheets[0] if sheets else "",
                         "quiz_banks": self.store.list_quiz_banks(),
                         "platform": sys.platform,
-                        "paste_supported": os.name == "nt",
+                        "paste_supported": os.name == "nt" or sys.platform == "darwin",
                     },
                 )
                 return
