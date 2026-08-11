@@ -15,7 +15,6 @@ from urllib.parse import quote
 
 from openpyxl import load_workbook
 
-import screen_ocr
 from feedback_common import (
     DEFAULT_SHEET,
     DEFAULT_WORKBOOK,
@@ -1408,45 +1407,47 @@ def ensure_desktop_ready(
     return status
 
 
-def _uid_or_name_match(text: str, job: PasteJob) -> tuple[bool, bool]:
-    uid_ok = bool(job.uid and job.uid in text)
-    name_parts = [part for part in job.student_name.split() if part]
-    name_ok = any(part in text for part in name_parts)
-    return uid_ok, name_ok
+# A real WeCom search result adds a result row (avatar + title + subtitle + timestamp)
+# above the "Search for mobile number/email online: ..." suggestion that WeCom shows no
+# matter what you search, match or not -- so the dropdown is reliably taller when there is
+# a real match than when there isn't. Calibrated against real data on a 1280x948 window:
+# a genuine match measured ~33% of window height, a confirmed non-match ~21%. Expressed as
+# a fraction of window height (not raw pixels) so it isn't tied to one screen resolution.
+WECOM_MATCH_HEIGHT_FRACTION = 0.26
 
 
-def _match_reason(uid_ok: bool, name_ok: bool, *, prefix: str = "verified") -> str:
-    if uid_ok and name_ok:
-        return f"{prefix}_uid_and_name"
-    if uid_ok:
-        return f"{prefix}_uid_only"
-    return f"{prefix}_name_only"
+def _search_dropdown_height_fraction(robot: "WeComPasteRobot", search_key: str) -> tuple[float, int]:
+    """Type search_key into WeCom's already-focused, already-empty search box and measure
+    how tall the resulting dropdown is, as a fraction of the window's height, by diffing
+    screenshots taken immediately before and after. Returns (fraction, height_px).
 
-
-def _verify_with_ocr_fallback(window: Any, text: str, job: PasteJob) -> tuple[bool, str]:
-    """Check uid/name against already-scraped UI Automation text, falling back to OCR
-    on a screenshot when that text is empty. WeCom in particular renders its whole UI as
-    custom-drawn graphics, so UI Automation usually has nothing to scrape at all -- OCR
-    reads the same pixels a person would see instead.
+    This deliberately does not read any text on screen: UI Automation exposes nothing for
+    WeCom (it draws its own UI rather than using real controls), and OCR text matching was
+    tried and found unreliable -- WeCom always echoes the raw search term back in its own
+    suggestion text regardless of whether anything matched, and the sidebar's many other
+    real contacts can coincidentally contain a fragment of whatever name is being checked,
+    so text-based checks produced false positives for uids that don't exist at all. Dropdown
+    height doesn't depend on reading or matching any text, so it isn't exposed to either
+    problem.
     """
-    uid_ok, name_ok = _uid_or_name_match(text, job)
-    if uid_ok or name_ok:
-        return True, _match_reason(uid_ok, name_ok)
+    from PIL import ImageChops, ImageGrab
 
-    try:
-        ocr_text = screen_ocr.capture_window_text(window)
-    except Exception as exc:
-        return False, f"ocr_failed: {type(exc).__name__}: {exc}"
+    window = robot.current_window()
+    rectangle = window.rectangle()
+    bbox = (rectangle.left, rectangle.top, rectangle.right, rectangle.bottom)
+    window_height = rectangle.bottom - rectangle.top
 
-    # OCR reads the whole screen, including boilerplate like "Search for mobile
-    # number/email online: <search term>" that echoes the search term back even when
-    # there is no real match (confirmed against a search that genuinely finds nothing).
-    # A genuine result also shows the student's name, which that boilerplate never does,
-    # so OCR requires both signals together rather than trusting either alone.
-    uid_ok, name_ok = _uid_or_name_match(ocr_text, job)
-    if uid_ok and name_ok:
-        return True, "ocr_verified_uid_and_name"
-    return False, "not_visible_in_text_or_ocr"
+    before = ImageGrab.grab(bbox=bbox)
+    copy_text_to_clipboard(search_key, description="the WeCom search key")
+    robot.send_keys("^v")
+    time.sleep(robot.settle_seconds)
+    after = ImageGrab.grab(bbox=bbox)
+
+    diff = ImageChops.difference(before.convert("RGB"), after.convert("RGB"))
+    box = diff.getbbox()
+    height = (box[3] - box[1]) if box else 0
+    fraction = (height / window_height) if window_height else 0.0
+    return fraction, height
 
 
 def run_wecom_job(
@@ -1463,17 +1464,22 @@ def run_wecom_job(
     )
 
     if job.action == "check-group-chat":
-        # WeCom renders its whole UI as custom-drawn graphics ("GDI+ Window" per its own
-        # window class), so UI Automation exposes zero readable text no matter what's on
-        # screen or whether a chat is opened -- confirmed against a chat proven to exist
-        # by a prior successful paste. The uid/name are visibly on screen in the search
-        # results the moment you search, though, so this only searches (never opens) and
-        # falls back to OCR on a screenshot, which reads the same pixels a person would.
-        robot.search_chat(job.search_key)
-        text = robot.visible_text(ignored_edit_values={job.search_key})
-        verified, reason = _verify_with_ocr_fallback(robot.current_window(), text, job)
-        robot.clear_search_state(job)
-        print(f"Verification: {reason}")
+        # Always searches by uid only, never by name. Never opens a chat -- just measures
+        # the search dropdown's height; see _search_dropdown_height_fraction for why.
+        robot.focus_window()
+        robot.send_keys(robot.search_shortcut)
+        time.sleep(0.3)
+        robot.send_keys("^a")
+        robot.send_keys("{BACKSPACE}")
+        time.sleep(0.2)
+        fraction, height = _search_dropdown_height_fraction(robot, job.search_key)
+        robot.send_keys("^a")
+        robot.send_keys("{BACKSPACE}")
+        verified = fraction >= WECOM_MATCH_HEIGHT_FRACTION
+        print(
+            f"Verification: dropdown height {height}px "
+            f"({fraction:.0%} of window, threshold {WECOM_MATCH_HEIGHT_FRACTION:.0%})"
+        )
         status = "verified" if verified else "not_found"
         print(f"Group chat check: {status}")
         return JobResult(status=status)
@@ -1532,11 +1538,20 @@ def run_whatsapp_job(
             title_re=args.whatsapp_title_re,
             search_shortcut=args.whatsapp_search_shortcut,
         )
-        robot.search_chat(job.search_key)
-        text = robot.visible_text(ignored_edit_values={job.search_key})
-        verified, reason = _verify_with_ocr_fallback(robot.current_window(), text, job)
-        robot.clear_search_state(job.search_key)
+        # WhatsApp Desktop/Web is a standard Electron app and (unlike WeCom) does expose
+        # real UI Automation text, so this trusts verify_chat's uid/search-key/name check.
+        # If this turns out to have the same false-positive risk WeCom's text check did
+        # (a name fragment coincidentally matching something else on screen), it should
+        # switch to the same dropdown-height approach used for WeCom instead.
+        try:
+            robot.open_chat_from_search(job)
+        except LookupError as exc:
+            robot.clear_search_state(job.search_key)
+            print(f"Group chat check: not_found ({exc})")
+            return JobResult(status="not_found")
+        verified, reason = robot.verify_chat(job)
         print(f"Verification: {reason}")
+        robot.clear_search_state(job.search_key)
         status = "verified" if verified else "not_found"
         print(f"Group chat check: {status}")
         return JobResult(status=status)
