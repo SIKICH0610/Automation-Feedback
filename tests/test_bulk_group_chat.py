@@ -154,6 +154,71 @@ class BulkGroupChatTest(unittest.TestCase):
         with self.assertRaises(FrontendError):
             self.runner.run({"action": "check-group-chat-bulk", "sheets": ["No Such Class"]})
 
+    ONLY_WECOM = {
+        "wecom": {"display_name": "WeCom", "window_found": True, "message": "window found"},
+        "whatsapp": {"display_name": "WhatsApp", "window_found": False, "message": "not running"},
+    }
+
+    def test_channel_is_passed_through_to_each_class(self) -> None:
+        self._stub_subprocess(probe=self.BOTH_OPEN)
+        self.runner.run(
+            {
+                "action": "check-group-chat-bulk",
+                "sheets": ["Class A", "Class B"],
+                "channel": "wecom",
+            }
+        )
+        for command in self.commands:
+            self.assertEqual(command[command.index("--channel") + 1], "wecom")
+
+    def test_channel_defaults_to_auto(self) -> None:
+        self._stub_subprocess(probe=self.BOTH_OPEN)
+        self.runner.run({"action": "check-group-chat-bulk", "sheets": ["Class A"]})
+        command = self.commands[0]
+        self.assertEqual(command[command.index("--channel") + 1], "auto")
+
+    def test_forced_channel_requires_that_specific_app(self) -> None:
+        # WhatsApp is shut, so a WhatsApp-only run must refuse even though WeCom is open.
+        self._stub_subprocess(probe=self.ONLY_WECOM)
+        with self.assertRaises(FrontendError) as caught:
+            self.runner.run(
+                {
+                    "action": "check-group-chat-bulk",
+                    "sheets": ["Class A"],
+                    "channel": "whatsapp",
+                }
+            )
+        self.assertIn("WhatsApp", str(caught.exception))
+        self.assertEqual(self.commands, [])
+
+    def test_forced_channel_runs_when_only_that_app_is_open(self) -> None:
+        self._stub_subprocess(probe=self.ONLY_WECOM)
+        result = self.runner.run(
+            {
+                "action": "check-group-chat-bulk",
+                "sheets": ["Class A"],
+                "channel": "wecom",
+            }
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(self.commands), 1)
+
+    def test_auto_still_runs_when_only_one_app_is_open(self) -> None:
+        self._stub_subprocess(probe=self.ONLY_WECOM)
+        result = self.runner.run({"action": "check-group-chat-bulk", "sheets": ["Class A"]})
+        self.assertTrue(result["ok"])
+
+    def test_rejects_unknown_channel(self) -> None:
+        self._stub_subprocess(probe=self.BOTH_OPEN)
+        with self.assertRaises(FrontendError):
+            self.runner.run(
+                {
+                    "action": "check-group-chat-bulk",
+                    "sheets": ["Class A"],
+                    "channel": "telegram",
+                }
+            )
+
     def test_duplicate_sheets_run_once(self) -> None:
         self._stub_subprocess(probe=self.BOTH_OPEN)
         self.runner.run(

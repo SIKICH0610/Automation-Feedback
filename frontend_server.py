@@ -159,6 +159,8 @@ class ActionRunner:
                 "check-group-chat",
                 "--mode",
                 "paste-only",
+                "--channel",
+                self._check_channel(payload),
             ], "Checked group chat status"
 
         if action in {"generate-quiz-feedback", "paste-quiz-feedback"}:
@@ -217,6 +219,13 @@ class ActionRunner:
 
         raise FrontendError(f"Unknown action {action!r}.")
 
+    @staticmethod
+    def _check_channel(payload: dict[str, Any]) -> str:
+        channel = str(payload.get("channel") or "auto").strip().lower()
+        if channel not in {"auto", "wecom", "whatsapp"}:
+            raise FrontendError(f"Unknown channel {channel!r}.")
+        return channel
+
     def _bulk_group_chat_sheets(self, payload: dict[str, Any]) -> list[str]:
         raw_sheets = payload.get("sheets")
         if not isinstance(raw_sheets, list) or not raw_sheets:
@@ -244,6 +253,7 @@ class ActionRunner:
         together even though each class ran as its own subprocess.
         """
         sheets = self._bulk_group_chat_sheets(payload)
+        channel = self._check_channel(payload)
 
         # Probe the desktop apps once up front. Without this, an unavailable app makes
         # every single student re-attempt a launch that cannot succeed -- slow, and for
@@ -274,18 +284,26 @@ class ActionRunner:
             ) from exc
 
         available = [key for key, status in statuses.items() if status.get("window_found")]
-        if not available:
+        # A forced channel needs that specific app; auto just needs something to work with.
+        required = [channel] if channel != "auto" else list(statuses)
+        if not any(key in available for key in required):
             details = "; ".join(
-                f"{status.get('display_name', key)}: {status.get('message', 'unavailable')}"
-                for key, status in statuses.items()
+                f"{statuses[key].get('display_name', key)}: {statuses[key].get('message', 'unavailable')}"
+                for key in required
+                if key in statuses
+            )
+            wanted = (
+                statuses.get(channel, {}).get("display_name", channel)
+                if channel != "auto"
+                else "Neither WeCom nor WhatsApp"
             )
             raise FrontendError(
-                "Neither WeCom nor WhatsApp has an open window, so nothing can be checked. "
-                f"Open at least one and try again. ({details})"
+                f"{wanted} has no open window, so nothing can be checked. "
+                f"Open it and try again. ({details})"
             )
 
         sections: list[str] = [
-            "Available apps: "
+            f"Channel: {channel} | available apps: "
             + ", ".join(statuses[key].get("display_name", key) for key in available)
         ]
         failed_sheets: list[str] = []
@@ -318,6 +336,8 @@ class ActionRunner:
                         "--mode",
                         "paste-only",
                         "--no-auto-open",
+                        "--channel",
+                        channel,
                     ]
                     try:
                         completed = subprocess.run(

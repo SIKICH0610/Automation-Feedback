@@ -1316,6 +1316,19 @@ def build_parser(
         help="Search WeCom / 企业微信 and print safe candidate UI elements without opening, pasting, or sending.",
     )
     parser.add_argument(
+        "--channel",
+        choices=("auto", "wecom", "whatsapp"),
+        default="auto",
+        help=(
+            "For check-group-chat, force which app is searched. auto (default) uses each "
+            "row's Preferred Channel / Parent Language and, when neither is set, tries "
+            "WeCom then falls back to WhatsApp, filling in Parent Language from whichever "
+            "matched. wecom / whatsapp search only that app and never write Parent "
+            "Language, since forcing a channel proves nothing about which language a "
+            "family uses."
+        ),
+    )
+    parser.add_argument(
         "--check-apps",
         action="store_true",
         help="Print WeCom / WhatsApp window availability as JSON and exit. Touches no workbook.",
@@ -1434,13 +1447,58 @@ WECOM_MATCH_HEIGHT_RATIO = 1.3  # a match's dropdown must be at least this much 
 # but far outside the range any of this org's real uids have used (which start with 7 or 8).
 WECOM_BASELINE_SEARCH_KEY = "0000000"
 
+# Timing for the dropdown measurement. A fixed settle wait long enough for the slowest
+# case wastes that time on every single student, so instead the dropdown is polled until
+# its measured height stops changing. Measured on a real window: the dropdown settles in
+# roughly 0.2-0.3s, against the 0.8s fixed wait this replaces.
+WECOM_POLL_INTERVAL_SECONDS = 0.07
+WECOM_POLL_STABLE_READINGS = 3  # consecutive identical heights before trusting the value
+WECOM_POLL_MAX_SECONDS = 2.0  # cap, so a hung dropdown cannot stall the whole batch
+
 _wecom_baseline_height_cache: int | None = None
+# The window box and the "search box is open and focused" state hold for a whole run, so
+# they are established once instead of per student. _wecom_reset_search_session() drops
+# them when a measurement looks wrong, so the next student re-establishes from scratch.
+_wecom_session: dict[str, Any] = {"bbox": None, "search_open": False}
+
+
+def _wecom_reset_search_session() -> None:
+    _wecom_session["search_open"] = False
+
+
+def _wecom_window_bbox(robot: "WeComPasteRobot") -> tuple[int, int, int, int]:
+    if _wecom_session["bbox"] is None:
+        rectangle = robot.current_window().rectangle()
+        _wecom_session["bbox"] = (
+            rectangle.left,
+            rectangle.top,
+            rectangle.right,
+            rectangle.bottom,
+        )
+    return _wecom_session["bbox"]
+
+
+def _ensure_wecom_search_open(robot: "WeComPasteRobot") -> None:
+    """Put focus in WeCom's search box, once per run rather than once per student.
+
+    After a measurement the box is only cleared, not closed, so it stays focused and the
+    next student can type straight into it. Re-focusing and re-opening search for every
+    student cost about 0.7s each with nothing to show for it.
+    """
+    if _wecom_session["search_open"]:
+        return
+    robot.focus_window()
+    robot.send_keys(robot.search_shortcut)
+    time.sleep(0.3)
+    _clear_wecom_search_box(robot)
+    time.sleep(0.15)
+    _wecom_session["search_open"] = True
 
 
 def _wecom_dropdown_height(robot: "WeComPasteRobot", search_key: str) -> int:
     """Type search_key into WeCom's already-focused, already-empty search box and measure
-    how tall the resulting dropdown is, in pixels, by diffing screenshots taken immediately
-    before and after. Assumes the search box is already open and empty.
+    how tall the resulting dropdown is, in pixels, by diffing screenshots taken before and
+    after. Assumes the search box is already open and empty.
 
     This deliberately does not read any text on screen: UI Automation exposes nothing for
     WeCom (it draws its own UI rather than using real controls), and OCR text matching was
@@ -1453,19 +1511,34 @@ def _wecom_dropdown_height(robot: "WeComPasteRobot", search_key: str) -> int:
     """
     from PIL import ImageChops, ImageGrab
 
-    window = robot.current_window()
-    rectangle = window.rectangle()
-    bbox = (rectangle.left, rectangle.top, rectangle.right, rectangle.bottom)
-
+    bbox = _wecom_window_bbox(robot)
     before = ImageGrab.grab(bbox=bbox)
     copy_text_to_clipboard(search_key, description="the WeCom search key")
     robot.send_keys("^v")
-    time.sleep(robot.settle_seconds)
-    after = ImageGrab.grab(bbox=bbox)
 
-    diff = ImageChops.difference(before.convert("RGB"), after.convert("RGB"))
-    box = diff.getbbox()
-    return (box[3] - box[1]) if box else 0
+    deadline = time.monotonic() + WECOM_POLL_MAX_SECONDS
+    height = 0
+    last_height: int | None = None
+    stable = 0
+    while True:
+        time.sleep(WECOM_POLL_INTERVAL_SECONDS)
+        after = ImageGrab.grab(bbox=bbox)
+        box = ImageChops.difference(before.convert("RGB"), after.convert("RGB")).getbbox()
+        height = (box[3] - box[1]) if box else 0
+
+        # Height 0 means nothing on screen changed at all, so the dropdown has not drawn
+        # yet; only a stable non-zero reading counts as settled.
+        if height and height == last_height:
+            stable += 1
+            if stable >= WECOM_POLL_STABLE_READINGS - 1:
+                break
+        else:
+            stable = 0
+        last_height = height
+
+        if time.monotonic() >= deadline:
+            break
+    return height
 
 
 def _clear_wecom_search_box(robot: "WeComPasteRobot") -> None:
@@ -1486,6 +1559,28 @@ def _wecom_no_match_baseline(robot: "WeComPasteRobot") -> int:
     return _wecom_baseline_height_cache
 
 
+_desktop_ready_cache: set[str] = set()
+
+
+def ensure_desktop_ready_once(
+    app_spec: DesktopAppSpec,
+    *,
+    app_exe: Path | None,
+    no_auto_open: bool,
+) -> None:
+    """ensure_desktop_ready, but only actually checked once per app per process.
+
+    The readiness check enumerates every desktop window through UI Automation, which
+    measured around 0.55s -- affordable once, but not once per student in a batch of
+    dozens. An app that disappears mid-batch still surfaces: the check path notices a
+    measurement where nothing on screen changed and re-establishes from scratch.
+    """
+    if app_spec.key in _desktop_ready_cache:
+        return
+    ensure_desktop_ready(app_spec, app_exe=app_exe, no_auto_open=no_auto_open)
+    _desktop_ready_cache.add(app_spec.key)
+
+
 def run_wecom_job(
     job: PasteJob,
     *,
@@ -1493,7 +1588,10 @@ def run_wecom_job(
     app_spec: DesktopAppSpec,
     app_exe: Path | None,
 ) -> JobResult:
-    ensure_desktop_ready(app_spec, app_exe=app_exe, no_auto_open=args.no_auto_open)
+    if job.action == "check-group-chat":
+        ensure_desktop_ready_once(app_spec, app_exe=app_exe, no_auto_open=args.no_auto_open)
+    else:
+        ensure_desktop_ready(app_spec, app_exe=app_exe, no_auto_open=args.no_auto_open)
     robot = WeComPasteRobot(
         title_re=args.wecom_title_re,
         search_shortcut=args.search_shortcut,
@@ -1503,13 +1601,17 @@ def run_wecom_job(
         # Always searches by uid only, never by name. Never opens a chat -- just measures
         # the search dropdown's height against a live-measured baseline; see
         # _wecom_dropdown_height and _wecom_no_match_baseline for why.
-        robot.focus_window()
-        robot.send_keys(robot.search_shortcut)
-        time.sleep(0.3)
-        _clear_wecom_search_box(robot)
-        time.sleep(0.2)
+        _ensure_wecom_search_open(robot)
         baseline = _wecom_no_match_baseline(robot)
         height = _wecom_dropdown_height(robot, job.search_key)
+        if height == 0:
+            # Nothing on screen changed, so the keystrokes did not reach the search box --
+            # focus was lost since the last student. Re-open search and measure again
+            # rather than reporting a not_found that never actually got searched.
+            print("WeCom search box lost focus; reopening and retrying.")
+            _wecom_reset_search_session()
+            _ensure_wecom_search_open(robot)
+            height = _wecom_dropdown_height(robot, job.search_key)
         _clear_wecom_search_box(robot)
         threshold = baseline * WECOM_MATCH_HEIGHT_RATIO
         verified = height > threshold
@@ -1570,7 +1672,7 @@ def run_whatsapp_job(
                 status="needs_review",
                 error="WhatsApp group_search needs WhatsApp Search Key or uid.",
             )
-        ensure_desktop_ready(app_spec, app_exe=app_exe, no_auto_open=args.no_auto_open)
+        ensure_desktop_ready_once(app_spec, app_exe=app_exe, no_auto_open=args.no_auto_open)
         robot = WhatsAppPasteRobot(
             title_re=args.whatsapp_title_re,
             search_shortcut=args.whatsapp_search_shortcut,
@@ -1650,6 +1752,18 @@ def run_job(
     app_specs: dict[str, DesktopAppSpec],
     batch_mode: bool,
 ) -> JobResult:
+    if job.action == "check-group-chat" and args.channel != "auto":
+        # Forcing a channel overrides the row's own routing. The search key has to be
+        # rebuilt too: a row routed to WhatsApp may carry a WhatsApp Search Key, which is
+        # meaningless to WeCom, and vice versa.
+        job = replace(
+            job,
+            channel=args.channel,
+            channel_explicit=True,
+            search_key=job.search_key if args.channel == "whatsapp" else job.uid,
+            whatsapp_target_type="group_search",
+        )
+
     print_job(job)
 
     if job.channel not in app_specs:

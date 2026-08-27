@@ -18,7 +18,14 @@ const state = {
   attachments: [],
   selectedAttachments: new Set(),
   bulkUnchecked: new Set(),
+  checkChannel: "auto",
   busy: false,
+};
+
+const CHANNEL_HINTS = {
+  auto: "Uses each student's own channel, and when they have none set, tries WeCom then WhatsApp — filling in Parent Language from whichever one matched.",
+  wecom: "Searches WeCom only. Parent Language is left alone, since forcing a channel says nothing about which language a family uses.",
+  whatsapp: "Searches WhatsApp only. Parent Language is left alone.",
 };
 
 const elements = {};
@@ -283,6 +290,13 @@ async function switchSemester(groupIndex) {
   await switchSheet(group.sheets[0]);
 }
 
+function renderChannelChoice() {
+  document.querySelectorAll(".channel-segment").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.channel === state.checkChannel);
+  });
+  if (elements.channelHint) elements.channelHint.textContent = CHANNEL_HINTS[state.checkChannel];
+}
+
 function bulkSelectedSheets() {
   return Array.from(elements.bulkClassList.querySelectorAll("input[type=checkbox]"))
     .filter((box) => box.checked)
@@ -383,7 +397,11 @@ async function runBulkGroupChatCheck() {
 
     const result = await api("/api/action", {
       method: "POST",
-      body: JSON.stringify({ action: "check-group-chat-bulk", sheets }),
+      body: JSON.stringify({
+        action: "check-group-chat-bulk",
+        sheets,
+        channel: state.checkChannel,
+      }),
     });
     setLog(result.output || result.label);
     toast(result.label);
@@ -978,6 +996,7 @@ async function runAction(action) {
         rows,
         quiz_number: state.quizNumber,
         attachment_ids: attachmentIds,
+        channel: state.checkChannel,
       }),
     });
     setLog(result.output || result.label);
@@ -1038,6 +1057,12 @@ function bindEvents() {
   elements.exportReport.addEventListener("click", () => downloadExport("report", "Report export"));
   elements.deleteSemester.addEventListener("click", deleteCurrentSemester);
   elements.bulkCheck.addEventListener("click", runBulkGroupChatCheck);
+  document.querySelectorAll(".channel-segment").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.checkChannel = button.dataset.channel;
+      renderChannelChoice();
+    });
+  });
   elements.bulkToggleAll.addEventListener("click", () => {
     const boxes = Array.from(elements.bulkClassList.querySelectorAll("input[type=checkbox]"));
     const turnOn = bulkSelectedSheets().length === 0;
@@ -1097,6 +1122,7 @@ async function initialize() {
     "bulkToggleAll",
     "bulkCheck",
     "bulkSummary",
+    "channelHint",
     "sheetTabs",
     "columnView",
     "studentSearch",
@@ -1145,6 +1171,7 @@ async function initialize() {
     elements.databasePath.title = bootstrap.database;
     renderTabs();
     renderQuizTarget();
+    renderChannelChoice();
     if (!bootstrap.default_sheet) throw new Error("The database has no class sheets.");
     await loadSheet(bootstrap.default_sheet);
     if (!bootstrap.paste_supported) {

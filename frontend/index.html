@@ -179,6 +179,15 @@
             <p class="bulk-hint">
               Checks every student on the ticked class rosters, not just the rows selected above.
             </p>
+            <div class="channel-row">
+              <p class="group-label">Search in</p>
+              <div class="segmented-control" aria-label="Which app to search">
+                <button class="channel-segment is-active" data-channel="auto" type="button">Auto</button>
+                <button class="channel-segment" data-channel="wecom" type="button">WeCom</button>
+                <button class="channel-segment" data-channel="whatsapp" type="button">WhatsApp</button>
+              </div>
+            </div>
+            <p id="channel-hint" class="bulk-hint"></p>
             <div id="bulk-class-list" class="bulk-class-list"></div>
             <button id="bulk-check" class="action-button paste" type="button">
               <span>Check group chats</span>

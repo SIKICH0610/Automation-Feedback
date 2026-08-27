@@ -918,6 +918,35 @@ thead th:nth-child(-n+3) {
   font-size: 13px;
 }
 
+.channel-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.channel-row .group-label {
+  margin: 0;
+}
+
+.channel-segment {
+  min-height: 26px;
+  padding: 0 9px;
+  background: transparent;
+  color: var(--muted);
+  border: 0;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.channel-segment.is-active {
+  background: var(--surface);
+  color: var(--teal-dark);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
+}
+
 .bulk-hint {
   margin: 0 0 8px;
   color: var(--muted);
