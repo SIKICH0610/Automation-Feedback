@@ -316,7 +316,13 @@ For a row with no `Preferred Channel` and no `Parent Language` set (the common c
 .\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --start-row 2 --end-row 10 --mode paste-only --action check-group-chat
 ```
 
-The frontend has the same action as the **Check group chat status** button next to **Paste comments**.
+The frontend has the same action as the **Check group chat status** button next to **Paste comments**, which checks the student rows you have selected in the current class.
+
+### Checking several classes at once
+
+The **Bulk group chat check** panel in the right-hand rail works on whole class rosters instead of selected rows. It lists every class in the semester you are currently viewing with its student count, all ticked by default; untick any you want to skip and press **Check group chats**. Unticked classes are remembered while you move between class tabs.
+
+This runs one class at a time under the hood and writes every class's results back together at the end. Before starting anything it checks once that WeCom or WhatsApp actually has an open window and stops immediately with a clear message if neither does — otherwise every student would separately retry a launch that cannot succeed, which is slow and makes WhatsApp open a browser tab per student. For that same reason the batch itself never auto-opens an app: have the ones you need already open. Budget roughly three seconds per student.
 
 ## Options
 

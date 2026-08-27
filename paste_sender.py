@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import datetime
 from dataclasses import dataclass, replace
 import os
@@ -1315,6 +1316,11 @@ def build_parser(
         help="Search WeCom / 企业微信 and print safe candidate UI elements without opening, pasting, or sending.",
     )
     parser.add_argument(
+        "--check-apps",
+        action="store_true",
+        help="Print WeCom / WhatsApp window availability as JSON and exit. Touches no workbook.",
+    )
+    parser.add_argument(
         "--debug-window-titles",
         action="store_true",
         help="Print app window titles that match the selected channel without pasting.",
@@ -1698,6 +1704,28 @@ def main(
         default_message_column=default_message_column,
         default_fallback_channel=default_fallback_channel,
     ).parse_args()
+
+    if args.check_apps:
+        # Readiness probe only: no workbook, no rows, no automation beyond looking for
+        # the app windows. Callers (the frontend's bulk check) run this in its own
+        # process because pywinauto/COM is unreliable inside a threaded HTTP server.
+        specs = build_app_specs(
+            wecom_title_re=args.wecom_title_re,
+            whatsapp_title_re=args.whatsapp_title_re,
+        )
+        report = {
+            key: {
+                "display_name": status.display_name,
+                "window_found": status.window_found,
+                "process_running": status.process_running,
+                "dependency_ok": status.dependency_ok,
+                "message": status.message,
+            }
+            for key, status in ((k, app_status(spec)) for k, spec in specs.items())
+        }
+        print(json.dumps(report, ensure_ascii=False))
+        return
+
     args.attachments = normalized_attachment_paths(args.attachment)
     class_review = args.class_review
     if args.class_review_file:

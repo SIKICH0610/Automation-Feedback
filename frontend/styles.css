@@ -918,6 +918,56 @@ thead th:nth-child(-n+3) {
   font-size: 13px;
 }
 
+.bulk-hint {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.bulk-class-list {
+  display: grid;
+  gap: 4px;
+  max-height: 190px;
+  overflow-y: auto;
+  margin-bottom: 10px;
+}
+
+.bulk-class {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.bulk-class input {
+  flex: 0 0 auto;
+}
+
+.bulk-class .bulk-class-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bulk-class .bulk-class-count {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.bulk-empty {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .import-overwrite-toggle {
   display: flex;
   align-items: flex-start;

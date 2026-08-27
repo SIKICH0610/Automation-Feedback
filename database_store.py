@@ -531,7 +531,13 @@ class SQLiteFeedbackStore:
                 for row in connection.execute("SELECT id, name FROM semesters").fetchall()
             }
             class_rows = connection.execute(
-                "SELECT name, position, semester_id FROM classes ORDER BY position"
+                """
+                SELECT c.name, c.position, c.semester_id, COUNT(s.id) AS student_count
+                FROM classes c
+                LEFT JOIN students s ON s.class_id = c.id
+                GROUP BY c.id
+                ORDER BY c.position
+                """
             ).fetchall()
 
         groups: list[dict[str, Any]] = []
@@ -542,8 +548,18 @@ class SQLiteFeedbackStore:
             if key not in group_index:
                 group_index[key] = len(groups)
                 label = semester_names.get(key, "") if key is not None else "Other Classes"
-                groups.append({"semester": label, "is_semester": key is not None, "sheets": []})
-            groups[group_index[key]]["sheets"].append(str(row["name"]))
+                groups.append(
+                    {
+                        "semester": label,
+                        "is_semester": key is not None,
+                        "sheets": [],
+                        "student_counts": {},
+                    }
+                )
+            group = groups[group_index[key]]
+            sheet_name = str(row["name"])
+            group["sheets"].append(sheet_name)
+            group["student_counts"][sheet_name] = int(row["student_count"])
         return groups
 
     def _default_column_template(self, connection: sqlite3.Connection) -> list[tuple[str, float]]:

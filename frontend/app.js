@@ -17,6 +17,7 @@ const state = {
   announcementDirty: false,
   attachments: [],
   selectedAttachments: new Set(),
+  bulkUnchecked: new Set(),
   busy: false,
 };
 
@@ -91,6 +92,8 @@ function setBusy(busy, title = "Working", detail = "Please keep this window open
       button.title = "Desktop paste automation is currently available on Windows.";
     });
   }
+  // The blanket re-enable above would undo the "nothing ticked" disabled state.
+  if (!busy) renderBulkSummary();
 }
 
 function toast(message, error = false) {
@@ -268,6 +271,8 @@ function renderTabs() {
     button.addEventListener("click", () => switchSheet(sheetName));
     elements.sheetTabs.appendChild(button);
   });
+
+  renderBulkClasses();
 }
 
 async function switchSemester(groupIndex) {
@@ -276,6 +281,121 @@ async function switchSemester(groupIndex) {
   if (!group || !group.sheets.length) return;
   if (group.sheets.includes(state.sheetName)) return;
   await switchSheet(group.sheets[0]);
+}
+
+function bulkSelectedSheets() {
+  return Array.from(elements.bulkClassList.querySelectorAll("input[type=checkbox]"))
+    .filter((box) => box.checked)
+    .map((box) => box.dataset.sheet);
+}
+
+function renderBulkSummary() {
+  if (!state.bootstrap || !elements.bulkClassList) return;
+  const groups = sheetGroups();
+  const group = groups[activeGroupIndex(groups)] || { student_counts: {} };
+  const counts = group.student_counts || {};
+  const selected = bulkSelectedSheets();
+  const students = selected.reduce((total, sheet) => total + (counts[sheet] || 0), 0);
+  elements.bulkSummary.textContent = `${selected.length} class(es), ${students} student(s)`;
+  elements.bulkCheck.disabled = state.busy || selected.length === 0;
+  elements.bulkToggleAll.textContent = selected.length ? "None" : "All";
+}
+
+function renderBulkClasses() {
+  const groups = sheetGroups();
+  const group = groups[activeGroupIndex(groups)];
+  elements.bulkScope.textContent = group ? group.semester || "Other Classes" : "No classes";
+  elements.bulkClassList.replaceChildren();
+
+  const sheets = group ? group.sheets : [];
+  const counts = (group && group.student_counts) || {};
+  if (!sheets.length) {
+    const empty = document.createElement("p");
+    empty.className = "bulk-empty";
+    empty.textContent = "No classes in this semester.";
+    elements.bulkClassList.appendChild(empty);
+  }
+
+  sheets.forEach((sheetName) => {
+    const label = document.createElement("label");
+    label.className = "bulk-class";
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    // Classes start ticked; anything the user unticks stays unticked when this list
+    // re-renders (which happens on every sheet load), rather than silently resetting.
+    checkbox.checked = !state.bulkUnchecked.has(sheetName);
+    checkbox.dataset.sheet = sheetName;
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) state.bulkUnchecked.delete(sheetName);
+      else state.bulkUnchecked.add(sheetName);
+      renderBulkSummary();
+    });
+
+    const name = document.createElement("span");
+    name.className = "bulk-class-name";
+    name.textContent = sheetName;
+    name.title = sheetName;
+
+    const count = document.createElement("span");
+    count.className = "bulk-class-count";
+    count.textContent = String(counts[sheetName] ?? 0);
+
+    label.appendChild(checkbox);
+    label.appendChild(name);
+    label.appendChild(count);
+    elements.bulkClassList.appendChild(label);
+  });
+
+  renderBulkSummary();
+}
+
+async function runBulkGroupChatCheck() {
+  if (state.busy) return;
+  const sheets = bulkSelectedSheets();
+  if (!sheets.length) {
+    toast("Tick at least one class to check.", true);
+    return;
+  }
+  const groups = sheetGroups();
+  const group = groups[activeGroupIndex(groups)] || { student_counts: {} };
+  const counts = group.student_counts || {};
+  const students = sheets.reduce((total, sheet) => total + (counts[sheet] || 0), 0);
+  // Each student is a separate WeCom/WhatsApp search, so a full semester takes a while
+  // and holds onto the desktop app the whole time. Say so before starting.
+  const minutes = Math.max(1, Math.round((students * 3) / 60));
+  const confirmed = window.confirm(
+    `Check group chats for ${students} student(s) across ${sheets.length} class(es)?\n\n` +
+      `This searches WeCom and WhatsApp once per student and will take roughly ${minutes} minute(s), ` +
+      `using those apps the whole time. It only reads and never sends anything.`
+  );
+  if (!confirmed) return;
+
+  try {
+    setBusy(
+      true,
+      "Checking group chats",
+      `${students} student(s) across ${sheets.length} class(es). Keep WeCom and WhatsApp available.`
+    );
+    setSaveState("Working", "neutral");
+    await saveAll({ quiet: true });
+    setLog(`Checking group chats for: ${sheets.join(", ")}...`);
+
+    const result = await api("/api/action", {
+      method: "POST",
+      body: JSON.stringify({ action: "check-group-chat-bulk", sheets }),
+    });
+    setLog(result.output || result.label);
+    toast(result.label);
+    await loadSheet(state.sheetName, preservedSelection());
+  } catch (error) {
+    const output = error.payload?.output || error.message;
+    setLog(output);
+    toast(error.message, true);
+    setSaveState("Needs attention", "dirty");
+  } finally {
+    setBusy(false);
+  }
 }
 
 function currentSemesterParam() {
@@ -917,6 +1037,17 @@ function bindEvents() {
   elements.exportExcel.addEventListener("click", () => downloadExport("full", "Excel export"));
   elements.exportReport.addEventListener("click", () => downloadExport("report", "Report export"));
   elements.deleteSemester.addEventListener("click", deleteCurrentSemester);
+  elements.bulkCheck.addEventListener("click", runBulkGroupChatCheck);
+  elements.bulkToggleAll.addEventListener("click", () => {
+    const boxes = Array.from(elements.bulkClassList.querySelectorAll("input[type=checkbox]"));
+    const turnOn = bulkSelectedSheets().length === 0;
+    boxes.forEach((box) => {
+      box.checked = turnOn;
+      if (turnOn) state.bulkUnchecked.delete(box.dataset.sheet);
+      else state.bulkUnchecked.add(box.dataset.sheet);
+    });
+    renderBulkSummary();
+  });
   elements.saveAnnouncement.addEventListener("click", async () => {
     try {
       setBusy(true, "Saving announcement", state.sheetName);
@@ -961,6 +1092,11 @@ async function initialize() {
     "saveState",
     "semesterSelect",
     "deleteSemester",
+    "bulkScope",
+    "bulkClassList",
+    "bulkToggleAll",
+    "bulkCheck",
+    "bulkSummary",
     "sheetTabs",
     "columnView",
     "studentSearch",

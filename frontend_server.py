@@ -38,6 +38,7 @@ DEFAULT_ANNOUNCEMENT_DIR = PROJECT_DIR / "announcements"
 MAX_REQUEST_BYTES = 8 * 1024 * 1024
 MAX_IMPORT_BYTES = 25 * 1024 * 1024
 ACTION_TIMEOUT_SECONDS = 30 * 60
+APP_PROBE_TIMEOUT_SECONDS = 60
 
 DEFAULT_APP_DATA_DIR = PROJECT_DIR / "app_data"
 DEFAULT_DATABASE = DEFAULT_APP_DATA_DIR / "feedback.db"
@@ -216,11 +217,162 @@ class ActionRunner:
 
         raise FrontendError(f"Unknown action {action!r}.")
 
+    def _bulk_group_chat_sheets(self, payload: dict[str, Any]) -> list[str]:
+        raw_sheets = payload.get("sheets")
+        if not isinstance(raw_sheets, list) or not raw_sheets:
+            raise FrontendError("Select at least one class to check.")
+        known = set(self.store.sheet_names())
+        sheets: list[str] = []
+        for value in raw_sheets:
+            sheet_name = str(value).strip()
+            if sheet_name not in known:
+                raise FrontendError(f"Sheet {sheet_name!r} was not found.")
+            if sheet_name not in sheets:
+                sheets.append(sheet_name)
+        return sheets
+
+    def _run_bulk_group_chat(
+        self,
+        payload: dict[str, Any],
+        environment: dict[str, str],
+    ) -> dict[str, Any]:
+        """Run the group-chat check across whole class rosters, one class at a time.
+
+        paste_sender.py takes a single --sheet, so this loops it per class rather than
+        teaching it about multiple sheets. The runtime workbook is prepared once and
+        synced back once at the end, so every class's results land in the database
+        together even though each class ran as its own subprocess.
+        """
+        sheets = self._bulk_group_chat_sheets(payload)
+
+        # Probe the desktop apps once up front. Without this, an unavailable app makes
+        # every single student re-attempt a launch that cannot succeed -- slow, and for
+        # WhatsApp it opens a web.whatsapp.com browser tab per student. Since readiness
+        # is established here, the per-class runs below use --no-auto-open so a long
+        # unattended batch never tries to open anything on its own.
+        #
+        # The probe runs as its own process rather than importing pywinauto here: COM
+        # misbehaves on the threaded HTTP server's request threads, where an in-process
+        # probe was observed to hang instead of returning.
+        try:
+            probe = subprocess.run(
+                [sys.executable, str(PROJECT_DIR / "paste_sender.py"), "--check-apps"],
+                cwd=PROJECT_DIR,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=APP_PROBE_TIMEOUT_SECONDS,
+                env=environment,
+                check=False,
+            )
+            statuses = json.loads(probe.stdout.strip() or "{}")
+        except (subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+            raise FrontendError(
+                "Could not determine whether WeCom or WhatsApp is open. "
+                "Make sure at least one is running, then try again."
+            ) from exc
+
+        available = [key for key, status in statuses.items() if status.get("window_found")]
+        if not available:
+            details = "; ".join(
+                f"{status.get('display_name', key)}: {status.get('message', 'unavailable')}"
+                for key, status in statuses.items()
+            )
+            raise FrontendError(
+                "Neither WeCom nor WhatsApp has an open window, so nothing can be checked. "
+                f"Open at least one and try again. ({details})"
+            )
+
+        sections: list[str] = [
+            "Available apps: "
+            + ", ".join(statuses[key].get("display_name", key) for key in available)
+        ]
+        failed_sheets: list[str] = []
+        checked_sheets = 0
+
+        with self.store.lock:
+            self.store.prepare_runtime_workbook()
+            try:
+                for sheet_name in sheets:
+                    rows = [
+                        int(row["excel_row"])
+                        for row in self.store.load_sheet(sheet_name)["rows"]
+                        if row.get("excel_row")
+                    ]
+                    if not rows:
+                        sections.append(f"===== {sheet_name} =====\n(no students on this roster)")
+                        continue
+
+                    command = [
+                        sys.executable,
+                        str(PROJECT_DIR / "paste_sender.py"),
+                        "--workbook",
+                        str(self.store.workbook_path),
+                        "--sheet",
+                        sheet_name,
+                        "--rows",
+                        ",".join(str(row) for row in sorted(rows)),
+                        "--action",
+                        "check-group-chat",
+                        "--mode",
+                        "paste-only",
+                        "--no-auto-open",
+                    ]
+                    try:
+                        completed = subprocess.run(
+                            command,
+                            cwd=PROJECT_DIR,
+                            capture_output=True,
+                            text=True,
+                            encoding="utf-8",
+                            errors="replace",
+                            timeout=ACTION_TIMEOUT_SECONDS,
+                            env=environment,
+                            check=False,
+                        )
+                    except subprocess.TimeoutExpired:
+                        failed_sheets.append(sheet_name)
+                        sections.append(
+                            f"===== {sheet_name} =====\n"
+                            f"Timed out after {ACTION_TIMEOUT_SECONDS // 60} minutes."
+                        )
+                        continue
+
+                    checked_sheets += 1
+                    if completed.returncode != 0:
+                        failed_sheets.append(sheet_name)
+                    body = "\n".join(
+                        part
+                        for part in (completed.stdout.strip(), completed.stderr.strip())
+                        if part
+                    )
+                    sections.append(f"===== {sheet_name} =====\n{body}")
+            finally:
+                self.store.sync_runtime_workbook()
+                self.store.remove_runtime_workbook()
+
+        label = f"Checked group chats for {checked_sheets} class(es)"
+        if failed_sheets:
+            label += f"; {len(failed_sheets)} had errors"
+        output = "\n\n".join(sections)
+        if len(output) > 50000:
+            output = output[-50000:]
+        return {
+            "ok": not failed_sheets,
+            "label": label,
+            "returncode": 1 if failed_sheets else 0,
+            "output": output,
+        }
+
     def run(self, payload: dict[str, Any]) -> dict[str, Any]:
         environment = os.environ.copy()
         environment["PYTHONUTF8"] = "1"
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
         environment["FEEDBACK_DATABASE_PATH"] = str(self.store.database_path)
+
+        if str(payload.get("action") or "").strip() == "check-group-chat-bulk":
+            return self._run_bulk_group_chat(payload, environment)
 
         attachment_ids = self._attachment_ids(payload)
         with TemporaryDirectory(
