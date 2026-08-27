@@ -368,6 +368,10 @@ class SQLiteFeedbackStore:
             "external_class_id": "TEXT",
             "weekly_time": "TEXT",
             "subject": "TEXT",
+            # What the class actually covered, written by the teacher. Kept on the class
+            # row rather than in a file like the announcement, so it cannot go stale when
+            # a class is renamed and is removed automatically when the class is deleted.
+            "lesson_recap": "TEXT",
         }
         for column_name, definition in additions.items():
             if column_name not in existing:
@@ -834,6 +838,25 @@ class SQLiteFeedbackStore:
             path = self.announcement_dir / announcement_filename(sheet_name)
             path.touch(exist_ok=True)
 
+    def read_lesson_recap(self, sheet_name: str) -> str:
+        with self.lock, self._connect() as connection:
+            class_row = self._class_row(connection, sheet_name)
+            row = connection.execute(
+                "SELECT lesson_recap FROM classes WHERE id = ?",
+                (int(class_row["id"]),),
+            ).fetchone()
+        return str(row["lesson_recap"] or "") if row else ""
+
+    def write_lesson_recap(self, sheet_name: str, text: str) -> str:
+        cleaned = str(text or "").strip()
+        with self.lock, self._connect() as connection:
+            class_row = self._class_row(connection, sheet_name)
+            connection.execute(
+                "UPDATE classes SET lesson_recap = ? WHERE id = ?",
+                (cleaned, int(class_row["id"])),
+            )
+        return cleaned
+
     def read_announcement(self, sheet_name: str) -> tuple[str, Path]:
         path = self.announcement_path(sheet_name)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -909,6 +932,7 @@ class SQLiteFeedbackStore:
             "rows": rows,
             "announcement": announcement,
             "announcement_path": str(announcement_path),
+            "lesson_recap": self.read_lesson_recap(sheet_name),
             "attachments": self.list_attachments(sheet_name),
         }
 

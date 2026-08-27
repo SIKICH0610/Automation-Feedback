@@ -92,6 +92,11 @@ class ActionRunner:
                 "Attachments stay open for review, so select one student for each attachment run."
             )
         announcement_path = self.store.announcement_path(sheet_name)
+        # Paragraph 1 of a generated comment comes from the teacher's lesson recap, not
+        # from the announcement. The announcement is separately pasted to whole classes,
+        # so reusing it here put things like "next week is cancelled" at the top of every
+        # student's feedback.
+        class_review_args = ["--class-review", self.store.read_lesson_recap(sheet_name)]
         attachment_args = [
             item
             for path in (attachment_paths or [])
@@ -117,8 +122,7 @@ class ActionRunner:
                 "general",
                 "--feedback-column",
                 "Feedback",
-                "--class-review-file",
-                str(announcement_path),
+                *class_review_args,
             ], "Generated comments"
 
         if action == "paste-announcement":
@@ -190,8 +194,7 @@ class ActionRunner:
                     "quiz",
                     "--feedback-column",
                     feedback_column,
-                    "--class-review-file",
-                    str(announcement_path),
+                    *class_review_args,
                     "--calculate-quiz-average",
                     "--quiz-score-column",
                     score_column,
@@ -719,6 +722,13 @@ class FrontendHandler(BaseHTTPRequestHandler):
                     str(payload.get("text") or ""),
                 )
                 self._send_json(200, {"ok": True, "path": str(path)})
+                return
+            if parsed.path == "/api/lesson-recap/save":
+                recap = self.store.write_lesson_recap(
+                    str(payload.get("sheet") or ""),
+                    str(payload.get("text") or ""),
+                )
+                self._send_json(200, {"ok": True, "lesson_recap": recap})
                 return
             if parsed.path == "/api/quiz-bank/save":
                 bank = self.store.save_quiz_bank(

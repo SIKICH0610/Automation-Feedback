@@ -7,6 +7,7 @@ from feedback_common import (
     FEEDBACK_TYPE_CHOICES,
     OBSERVATION_FIELDS,
     StudentRow,
+    append_homework_note,
     append_parent_closing,
     class_review_paragraph,
     clean_parent_feedback_text,
@@ -112,6 +113,11 @@ class FeedbackGenerator:
         homework = homework_paragraph(student, is_chinese)
         personal_paragraphs = self.personal_paragraphs(student, feedback_type)
 
+        # The standing homework note belongs on the class-performance comment. A
+        # quiz-only message is about that quiz, and a parent who also gets the general
+        # comment would otherwise read the same instructions twice.
+        wants_homework_note = feedback_type in {"general", "comprehensive"}
+
         if self.use_api:
             local_comment = "\n\n".join(personal_paragraphs)
             personal_section = personal_feedback_with_gpt(
@@ -121,9 +127,20 @@ class FeedbackGenerator:
                 homework=homework,
                 model=self.model,
                 feedback_type=feedback_type,
-            )
-            feedback = clean_parent_feedback_text("\n\n".join([class_paragraph, personal_section.strip()]))
+            ).strip()
+            if wants_homework_note:
+                personal_section = append_homework_note(personal_section, is_chinese)
+            feedback = clean_parent_feedback_text("\n\n".join([class_paragraph, personal_section]))
             return append_parent_closing(feedback, is_chinese)
+
+        if wants_homework_note:
+            if personal_paragraphs:
+                personal_paragraphs = [
+                    *personal_paragraphs[:-1],
+                    append_homework_note(personal_paragraphs[-1], is_chinese),
+                ]
+            else:
+                personal_paragraphs = [append_homework_note("", is_chinese)]
 
         paragraphs = [class_paragraph, *personal_paragraphs]
         if homework:

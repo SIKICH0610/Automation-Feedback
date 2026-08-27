@@ -415,6 +415,13 @@ textarea:focus,
   border-color: #aebbb6;
 }
 
+.field-hint {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .button.danger {
   color: var(--red);
   background: var(--red-soft);

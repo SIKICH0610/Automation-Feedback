@@ -15,6 +15,7 @@ const state = {
   quizNumber: "1",
   dirty: false,
   announcementDirty: false,
+  recapDirty: false,
   attachments: [],
   selectedAttachments: new Set(),
   bulkUnchecked: new Set(),
@@ -80,6 +81,7 @@ function setSaveState(label, kind = "neutral") {
 
 function markDirty(kind = "sheet") {
   if (kind === "announcement") state.announcementDirty = true;
+  else if (kind === "recap") state.recapDirty = true;
   else state.dirty = true;
   setSaveState("Unsaved changes", "dirty");
 }
@@ -259,7 +261,7 @@ async function deleteStudent(row) {
     setBusy(true, "Deleting student", name);
     // Any unsaved edits to other rows must be saved first -- the delete goes straight
     // to the database and reloading afterward would otherwise silently drop them.
-    if (state.dirty || state.announcementDirty) await saveAll({ quiet: true });
+    if (state.dirty || state.announcementDirty || state.recapDirty) await saveAll({ quiet: true });
     const payload = await api("/api/student/delete", {
       method: "POST",
       body: JSON.stringify({ sheet: state.sheetName, student_id: row.student_id }),
@@ -706,7 +708,7 @@ async function openSearchResult(result) {
   if (state.busy) return;
   try {
     setBusy(true, "Opening student", `${result.full_name} in ${result.sheet}`);
-    if (state.dirty || state.announcementDirty) await saveAll({ quiet: true });
+    if (state.dirty || state.announcementDirty || state.recapDirty) await saveAll({ quiet: true });
     if (result.sheet !== state.sheetName) await loadSheet(result.sheet);
 
     state.searchScope = "current";
@@ -912,6 +914,8 @@ function applySheetData(data, preserve = null) {
   elements.announcementText.value = data.announcement || "";
   elements.announcementPath.textContent = data.announcement_path || "";
   elements.announcementPath.title = data.announcement_path || "";
+  elements.recapText.value = data.lesson_recap || "";
+  state.recapDirty = false;
   state.attachments = data.attachments || [];
   state.selectedAttachments = new Set(state.attachments.map((attachment) => attachment.id));
   state.dirty = false;
@@ -943,7 +947,7 @@ async function loadSheet(sheetName, preserve = null) {
 async function switchSheet(sheetName) {
   if (state.busy || sheetName === state.sheetName) return;
   try {
-    if (state.dirty || state.announcementDirty) await saveAll({ quiet: true });
+    if (state.dirty || state.announcementDirty || state.recapDirty) await saveAll({ quiet: true });
     setBusy(true, "Opening class", sheetName);
     await loadSheet(sheetName);
   } catch (error) {
@@ -966,6 +970,19 @@ async function saveAnnouncement({ quiet = false } = {}) {
   elements.announcementPath.textContent = payload.path;
   elements.announcementPath.title = payload.path;
   if (!quiet) toast("Announcement saved.");
+}
+
+async function saveLessonRecap({ quiet = false } = {}) {
+  if (!state.recapDirty && quiet) return;
+  await api("/api/lesson-recap/save", {
+    method: "POST",
+    body: JSON.stringify({
+      sheet: state.sheetName,
+      text: elements.recapText.value,
+    }),
+  });
+  state.recapDirty = false;
+  if (!quiet) toast("Lesson recap saved.");
 }
 
 async function saveSheet({ quiet = false } = {}) {
@@ -1002,9 +1019,11 @@ async function saveAll({ quiet = false } = {}) {
   setSaveState("Saving", "neutral");
   try {
     await saveAnnouncement({ quiet: true });
+    await saveLessonRecap({ quiet: true });
     await saveSheet({ quiet: true });
     state.dirty = false;
     state.announcementDirty = false;
+    state.recapDirty = false;
     setSaveState("Saved", "saved");
     if (!quiet) toast("All changes saved.");
   } catch (error) {
@@ -1174,6 +1193,18 @@ function bindEvents() {
     }
   });
   elements.announcementText.addEventListener("input", () => markDirty("announcement"));
+  elements.saveRecap.addEventListener("click", async () => {
+    try {
+      setBusy(true, "Saving lesson recap", state.sheetName);
+      await saveLessonRecap();
+      if (!state.dirty) setSaveState("Saved", "saved");
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      setBusy(false);
+    }
+  });
+  elements.recapText.addEventListener("input", () => markDirty("recap"));
   elements.addAttachment.addEventListener("click", () => elements.attachmentInput.click());
   elements.attachmentInput.addEventListener("change", () => uploadAttachments(elements.attachmentInput.files));
   document.querySelectorAll(".segment").forEach((button) => {
@@ -1194,7 +1225,7 @@ function bindEvents() {
     }
   });
   window.addEventListener("beforeunload", (event) => {
-    if (!state.dirty && !state.announcementDirty) return;
+    if (!state.dirty && !state.announcementDirty && !state.recapDirty) return;
     event.preventDefault();
     event.returnValue = "";
   });
@@ -1234,6 +1265,8 @@ async function initialize() {
     "saveAnnouncement",
     "announcementText",
     "announcementPath",
+    "saveRecap",
+    "recapText",
     "addAttachment",
     "attachmentInput",
     "attachmentSummary",

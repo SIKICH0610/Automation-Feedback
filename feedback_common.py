@@ -392,17 +392,46 @@ Homework feedback:
     return create_response(prompt, model=model)
 
 
+# The teacher writes only the topics covered ("三角形全等的判定、勾股定理的应用"), and
+# the greeting and sentence frame are added here, so every message opens the same warm
+# way without the teacher retyping it. A recap that already reads as a full sentence
+# (it ends with its own punctuation) is kept verbatim instead of being forced into the
+# frame, which would otherwise produce "主要围绕我们复习了...展开".
+ZH_RECAP_SENTENCE_ENDINGS = ("。", "！", "？", "～", "~", ".", "!", "?")
+
+
+def soften_zh(text: str) -> str:
+    """Trade a final full stop for a wave dash, the way a teacher texting a parent would."""
+    stripped = text.rstrip()
+    if stripped.endswith("。"):
+        return stripped[:-1] + "～"
+    if stripped.endswith(ZH_RECAP_SENTENCE_ENDINGS):
+        return stripped
+    return stripped + "～"
+
+
 def class_review_paragraph(class_review: str, is_chinese: bool) -> str:
     class_review = class_review.strip()
-    if class_review:
-        return class_review
 
     if is_chinese:
-        return "今天课堂主要围绕本节几何课的核心概念、例题讲解和课堂练习展开。"
-    return (
-        "In today's class, we reviewed the main geometry ideas for the lesson, "
-        "worked through examples, and practiced applying the methods in class."
-    )
+        if not class_review:
+            return "家长您好～我们今天的课程主要围绕本节的核心知识点、例题讲解和课堂练习展开～"
+        if class_review.startswith("家长"):
+            return soften_zh(class_review)
+        if class_review.endswith(ZH_RECAP_SENTENCE_ENDINGS):
+            return f"家长您好～{soften_zh(class_review)}"
+        return f"家长您好～我们今天的课程主要围绕{class_review}展开～"
+
+    if not class_review:
+        return (
+            "Hello! In today's class, we reviewed the main ideas for the lesson, "
+            "worked through examples, and practiced applying the methods in class."
+        )
+    if class_review.lower().startswith("hello"):
+        return class_review
+    if class_review.endswith((".", "!", "?")):
+        return f"Hello! {class_review}"
+    return f"Hello! In today's class, we focused on {class_review}."
 
 
 def clean_parent_feedback_text(text: str) -> str:
@@ -414,9 +443,36 @@ def clean_parent_feedback_text(text: str) -> str:
     return cleaned.replace("家长", "您")
 
 
+# Standing note about how homework works, appended to the personal comment so every
+# parent gets the submission instructions without the teacher retyping them.
+ZH_HOMEWORK_NOTE = (
+    "我们的作业是本讲内容之后的练习，孩子做完之后可以在 app 上提交，"
+    "会有一些 coin 可以兑换小礼品～我也会及时查看作业，了解孩子的学习状况～"
+)
+EN_HOMEWORK_NOTE = (
+    "The homework covers what we did in this lesson. Once your child finishes it, "
+    "they can submit it in the app and earn coins to redeem small prizes. I will "
+    "review each submission so I can keep track of how your child is doing."
+)
+
+
+def homework_note(is_chinese: bool) -> str:
+    return ZH_HOMEWORK_NOTE if is_chinese else EN_HOMEWORK_NOTE
+
+
+def append_homework_note(paragraph: str, is_chinese: bool) -> str:
+    note = homework_note(is_chinese)
+    cleaned = paragraph.strip()
+    if not cleaned or note in cleaned:
+        return cleaned or note
+    if is_chinese:
+        return f"{soften_zh(cleaned)}{note}"
+    return f"{cleaned} {note}"
+
+
 def closing_sentence(is_chinese: bool) -> str:
     if is_chinese:
-        return "如果您还有任何问题，可以直接在群里问我，我会尽快回复。"
+        return "如果您还有任何问题，可以直接在群里问我，我会尽快回复～"
     return "If you have any questions, feel free to ask me directly in the group chat. I will reply as soon as possible."
 
 
