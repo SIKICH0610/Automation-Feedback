@@ -114,6 +114,24 @@ Re-running the same file (or a corrected re-export) is safe: an existing semeste
 
 The frontend has the same workflow under the **Import Students** tab: choose the `.xlsx` file, type a new semester name (or pick an existing one from the suggestions) to add classes into it, click **Preview** to see the classes and student counts found, uncheck any class you don't want, then **Commit Import**.
 
+### Overwrite an existing roster from a new file
+
+Add `--overwrite` to sync a matched class's roster to exactly match the uploaded file, instead of only adding new students:
+
+```powershell
+python import_enrollment.py --source-file ".\enrollment_export.xlsx" --semester "Fall 2026" --class-id 123789 --overwrite --commit --confirm-delete
+```
+
+A student currently on that class's roster but missing from the file is **permanently deleted**; `--confirm-delete` is required whenever the preview shows anyone would be removed, as an explicit acknowledgment. A student present in both gets their name and `Group Chat` refreshed from the file, but every other field (feedback, quiz scores, teacher notes, attendance) is left untouched — overwrite only syncs who's on the roster, not what's already been recorded about them. A timestamped backup of the whole database (`app_data/feedback.*.before-overwrite-*.db`) is made automatically before any deletion runs. The frontend has the same option as the **Overwrite existing roster** checkbox on the Import Students tab, with the same confirmation step.
+
+### Delete a semester
+
+The semester dropdown (top-left of the class tabs, once you have more than one semester) has a **Delete "<semester name>"** button next to it. It shows exactly which classes and how many students would be permanently removed before you confirm, makes the same automatic backup, and keeps you on the roster view afterward — falling back to the first remaining class rather than reloading the page.
+
+## Export a curated status report
+
+**Export Report**, next to **Export Excel** in the roster toolbar, writes `exports/Student_Report_Export.xlsx` — one sheet per class with just Name, Student ID, 电话号码 (`WhatsApp Phone`, blank unless set), 是否有群 (`Group Chat`), 是否发开课提醒 (`Before Class Informing`), 是否发课后反馈 (whether `Send Status` is `pasted`), 第一节课反馈 (`Feedback`), 第一次quiz反馈 (`Quiz1 Feedback`), and 第二次quiz反馈 (`Quiz2 Feedback`). This is a read-only snapshot for reporting; unlike **Export Excel**, it isn't meant to be re-imported. Editing it does not change the database.
+
 ## Create the class review file
 
 The editable class review file lives in this project folder as `class_review.txt`.

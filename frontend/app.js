@@ -241,6 +241,7 @@ function activeGroupIndex(groups) {
 function renderTabs() {
   const groups = sheetGroups();
   const groupIndex = activeGroupIndex(groups);
+  const activeGroup = groups[groupIndex];
 
   elements.semesterSelect.hidden = groups.length <= 1;
   if (groups.length > 1) {
@@ -255,8 +256,11 @@ function renderTabs() {
     elements.semesterSelect.value = String(groupIndex);
   }
 
+  elements.deleteSemester.hidden = !(groups.length > 1 && activeGroup.is_semester);
+  elements.deleteSemester.textContent = `Delete "${activeGroup.semester}"`;
+
   elements.sheetTabs.replaceChildren();
-  groups[groupIndex].sheets.forEach((sheetName) => {
+  activeGroup.sheets.forEach((sheetName) => {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `sheet-tab${sheetName === state.sheetName ? " is-active" : ""}`;
@@ -272,6 +276,51 @@ async function switchSemester(groupIndex) {
   if (!group || !group.sheets.length) return;
   if (group.sheets.includes(state.sheetName)) return;
   await switchSheet(group.sheets[0]);
+}
+
+async function deleteCurrentSemester() {
+  if (state.busy) return;
+  const groups = sheetGroups();
+  const group = groups[activeGroupIndex(groups)];
+  if (!group || !group.is_semester) return;
+  const semesterName = group.semester;
+
+  try {
+    setBusy(true, "Checking semester", `Looking up what "${semesterName}" contains.`);
+    const preview = await api("/api/semester/delete", {
+      method: "POST",
+      body: JSON.stringify({ semester: semesterName, confirm: false }),
+    });
+    const plan = preview.plan;
+    const confirmed = window.confirm(
+      `Delete semester "${semesterName}"? This permanently removes ${plan.classes.length} class(es) and ${plan.student_count} student(s): ${plan.classes.join(", ")}.\n\nA database backup is made automatically, but this cannot be undone from the app.`
+    );
+    if (!confirmed) {
+      toast("Cancelled. Nothing was deleted.");
+      return;
+    }
+
+    setBusy(true, "Deleting semester", `Removing "${semesterName}" and its classes.`);
+    await api("/api/semester/delete", {
+      method: "POST",
+      body: JSON.stringify({ semester: semesterName, confirm: true }),
+    });
+    toast(`Deleted "${semesterName}".`);
+
+    const bootstrap = await api("/api/bootstrap");
+    state.bootstrap = bootstrap;
+    const remainingGroups = sheetGroups();
+    const fallbackSheet = remainingGroups[0]?.sheets[0] || bootstrap.default_sheet;
+    if (fallbackSheet) {
+      await loadSheet(fallbackSheet);
+    } else {
+      renderTabs();
+    }
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    setBusy(false);
+  }
 }
 
 function visibleColumns() {
@@ -828,6 +877,24 @@ function bindEvents() {
       setBusy(false);
     }
   });
+  elements.exportReport.addEventListener("click", async () => {
+    try {
+      setBusy(true, "Exporting report", "Creating the curated status report.");
+      await saveAll({ quiet: true });
+      const result = await api("/api/export/report", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      setLog(`${result.message}\n${result.path}`);
+      toast("Report export created.");
+    } catch (error) {
+      setLog(error.message);
+      toast(error.message, true);
+    } finally {
+      setBusy(false);
+    }
+  });
+  elements.deleteSemester.addEventListener("click", deleteCurrentSemester);
   elements.saveAnnouncement.addEventListener("click", async () => {
     try {
       setBusy(true, "Saving announcement", state.sheetName);
@@ -871,6 +938,7 @@ async function initialize() {
     "databasePath",
     "saveState",
     "semesterSelect",
+    "deleteSemester",
     "sheetTabs",
     "columnView",
     "studentSearch",
@@ -879,6 +947,7 @@ async function initialize() {
     "addRow",
     "saveSheet",
     "exportExcel",
+    "exportReport",
     "selectionCount",
     "rowCount",
     "selectVisible",

@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shutil
 import sqlite3
 import threading
 from typing import Any, Iterator
@@ -94,6 +95,43 @@ STUDENT_COLUMNS = {
     "WhatsApp Target Type",
 }
 AUDIT_COLUMNS = {"Send Status", "Send Error", "Last Attempt"}
+
+REPORT_COLUMNS = (
+    "Name",
+    "Student ID",
+    "电话号码",
+    "是否有群",
+    "是否发开课提醒",
+    "是否发课后反馈",
+    "第一节课反馈",
+    "第一次quiz反馈",
+    "第二次quiz反馈",
+)
+
+
+def _report_yes_no(value: Any) -> str:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "是"}:
+            return "是"
+        return "否"
+    return "是" if bool(value) else "否"
+
+
+def _report_row(values: dict[str, Any]) -> tuple[Any, ...]:
+    name = f"{values.get('First Name') or ''} {values.get('Last Name') or ''}".strip()
+    sent_after_class = str(values.get("Send Status") or "").strip().lower() == "pasted"
+    return (
+        name,
+        values.get("uid") or "",
+        values.get("WhatsApp Phone") or "",
+        _report_yes_no(values.get("Group Chat")),
+        _report_yes_no(values.get("Before Class Informing")),
+        "是" if sent_after_class else "否",
+        values.get("Feedback") or "",
+        values.get("Quiz1 Feedback") or "",
+        values.get("Quiz2 Feedback") or "",
+    )
 
 
 class StoreError(Exception):
@@ -431,6 +469,49 @@ class SQLiteFeedbackStore:
             ).fetchall()
             return [{"id": int(row["id"]), "name": str(row["name"])} for row in rows]
 
+    def delete_semester(self, semester_name: str, *, commit: bool = False) -> dict[str, Any]:
+        """Permanently delete a semester along with every class and student in it.
+
+        Classes and students cascade-delete automatically (both reference their parent
+        via ON DELETE CASCADE). With commit=False (the default), nothing is deleted and
+        the same plan (which classes, how many students) is returned so callers can show
+        it for confirmation first. A timestamped backup of the whole database file is
+        made automatically before the delete runs.
+        """
+        with self.lock:
+            with self._connect() as connection:
+                semester_row = connection.execute(
+                    "SELECT id FROM semesters WHERE name = ?", (semester_name,)
+                ).fetchone()
+                if semester_row is None:
+                    raise StoreError(f"Semester {semester_name!r} was not found.")
+                semester_id = int(semester_row["id"])
+                class_rows = connection.execute(
+                    "SELECT id, name FROM classes WHERE semester_id = ? ORDER BY position",
+                    (semester_id,),
+                ).fetchall()
+                plan = {
+                    "semester": semester_name,
+                    "classes": [str(row["name"]) for row in class_rows],
+                    "student_count": sum(
+                        connection.execute(
+                            "SELECT COUNT(*) FROM students WHERE class_id = ?", (int(row["id"]),)
+                        ).fetchone()[0]
+                        for row in class_rows
+                    ),
+                }
+                if not commit:
+                    connection.rollback()
+                    return plan
+
+            self._backup_database_file()
+
+            with self._connect() as connection:
+                connection.execute("DELETE FROM classes WHERE semester_id = ?", (semester_id,))
+                connection.execute("DELETE FROM semesters WHERE id = ?", (semester_id,))
+
+            return plan
+
     def sheet_groups(self) -> list[dict[str, Any]]:
         """Class sheet names grouped into semester blocks, in position order.
 
@@ -454,7 +535,7 @@ class SQLiteFeedbackStore:
             if key not in group_index:
                 group_index[key] = len(groups)
                 label = semester_names.get(key, "") if key is not None else "Other Classes"
-                groups.append({"semester": label, "sheets": []})
+                groups.append({"semester": label, "is_semester": key is not None, "sheets": []})
             groups[group_index[key]]["sheets"].append(str(row["name"]))
         return groups
 
@@ -477,6 +558,7 @@ class SQLiteFeedbackStore:
         *,
         semester_name: str,
         class_groups: list[dict[str, Any]],
+        overwrite: bool = False,
     ) -> dict[str, Any]:
         semester_row = connection.execute(
             "SELECT id FROM semesters WHERE name = ?", (semester_name,)
@@ -485,6 +567,7 @@ class SQLiteFeedbackStore:
         plan: dict[str, Any] = {
             "semester": semester_name,
             "semester_exists": semester_exists,
+            "overwrite": overwrite,
             "classes": [],
         }
         for group in class_groups:
@@ -495,13 +578,26 @@ class SQLiteFeedbackStore:
                     (int(semester_row["id"]), group["external_class_id"]),
                 ).fetchone()
 
+            incoming_uids = {
+                str(student["uid"]).strip() for student in group["students"] if str(student["uid"]).strip()
+            }
+
             existing_uids: set[str] = set()
+            students_to_remove: list[dict[str, str]] = []
             if class_row is not None:
                 for student in self._students(connection, int(class_row["id"])):
                     values = json.loads(str(student["values_json"]))
                     uid = str(values.get("uid") or "").strip()
                     if uid:
                         existing_uids.add(uid)
+                    if overwrite and uid and uid not in incoming_uids:
+                        students_to_remove.append(
+                            {
+                                "uid": uid,
+                                "first_name": str(values.get("First Name") or ""),
+                                "last_name": str(values.get("Last Name") or ""),
+                            }
+                        )
 
             class_plan = {
                 "name": group["name"],
@@ -518,9 +614,18 @@ class SQLiteFeedbackStore:
                     }
                     for student in group["students"]
                 ],
+                "students_to_remove": students_to_remove,
             }
             plan["classes"].append(class_plan)
         return plan
+
+    def _backup_database_file(self) -> Path:
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup_path = self.database_path.with_name(
+            f"{self.database_path.stem}.before-overwrite-{timestamp}{self.database_path.suffix}"
+        )
+        shutil.copy2(self.database_path, backup_path)
+        return backup_path
 
     def import_students(
         self,
@@ -528,6 +633,7 @@ class SQLiteFeedbackStore:
         semester_name: str,
         class_groups: list[dict[str, Any]],
         commit: bool = False,
+        overwrite: bool = False,
     ) -> dict[str, Any]:
         """Import enrollment data grouped by platform class, under a named semester block.
 
@@ -537,107 +643,160 @@ class SQLiteFeedbackStore:
             "students": [{"uid": str, "first_name": str, "last_name": str, "in_group": bool | None}, ...],
         }
         A semester is created if semester_name doesn't exist yet, otherwise reused. Within a
-        semester, a class is matched by external_class_id and created if missing. Students are
-        matched by uid within their class; existing students are left untouched and only new
-        uids are inserted, so re-running an import (or importing one new class at a time) is safe.
+        semester, a class is matched by external_class_id and created if missing.
+
+        With overwrite=False (the default), students are matched by uid within their class;
+        existing students are left completely untouched and only new uids are inserted, so
+        re-running an import (or importing one new class at a time) is safe.
+
+        With overwrite=True, an existing class's roster is synced to exactly match the
+        incoming group: a student already on the roster whose uid is not in the incoming
+        group is permanently deleted, a student present in both gets First Name, Last Name,
+        and Group Chat (when provided) refreshed from the incoming data, and a student only
+        in the incoming group is inserted. Every other field for a retained student (feedback,
+        quiz scores, teacher remarks, attendance notes, etc.) is left untouched -- overwrite
+        only syncs roster membership and identity fields, not accumulated teaching data. A
+        timestamped backup of the whole database file is made automatically before any
+        overwrite delete runs.
+
         With commit=False (the default) nothing is written; the same plan that would be applied
         is returned so callers can preview it first.
         """
-        with self.lock, self._connect() as connection:
-            plan = self._plan_import(connection, semester_name=semester_name, class_groups=class_groups)
-            if not commit:
-                connection.rollback()
-                return plan
-
-            semester_row = connection.execute(
-                "SELECT id FROM semesters WHERE name = ?", (semester_name,)
-            ).fetchone()
-            if semester_row is None:
-                position = connection.execute(
-                    "SELECT COALESCE(MAX(position), -1) + 1 FROM semesters"
-                ).fetchone()[0]
-                cursor = connection.execute(
-                    "INSERT INTO semesters(name, position) VALUES (?, ?)",
-                    (semester_name, position),
+        with self.lock:
+            with self._connect() as connection:
+                plan = self._plan_import(
+                    connection,
+                    semester_name=semester_name,
+                    class_groups=class_groups,
+                    overwrite=overwrite,
                 )
-                semester_id = int(cursor.lastrowid)
-            else:
-                semester_id = int(semester_row["id"])
+                if not commit:
+                    connection.rollback()
+                    return plan
 
-            template_columns = self._default_column_template(connection)
-            created_new_class = False
-            existing_names = {
-                str(row["name"]) for row in connection.execute("SELECT name FROM classes").fetchall()
-            }
+            if overwrite:
+                self._backup_database_file()
 
-            for group in class_groups:
-                class_row = connection.execute(
-                    "SELECT id FROM classes WHERE semester_id = ? AND external_class_id = ?",
-                    (semester_id, group["external_class_id"]),
+            with self._connect() as connection:
+                semester_row = connection.execute(
+                    "SELECT id FROM semesters WHERE name = ?", (semester_name,)
                 ).fetchone()
-                if class_row is None:
-                    created_new_class = True
+                if semester_row is None:
                     position = connection.execute(
-                        "SELECT COALESCE(MAX(position), -1) + 1 FROM classes"
+                        "SELECT COALESCE(MAX(position), -1) + 1 FROM semesters"
                     ).fetchone()[0]
-                    sheet_name = safe_sheet_name(
-                        group["name"], group.get("weekly_time", ""), existing_names
-                    )
-                    existing_names.add(sheet_name)
                     cursor = connection.execute(
-                        """
-                        INSERT INTO classes(name, position, semester_id, external_class_id, weekly_time, subject)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            sheet_name,
-                            position,
-                            semester_id,
-                            group["external_class_id"],
-                            group.get("weekly_time", ""),
-                            group.get("subject", ""),
-                        ),
+                        "INSERT INTO semesters(name, position) VALUES (?, ?)",
+                        (semester_name, position),
                     )
-                    class_id = int(cursor.lastrowid)
-                    for column_position, (column_name, width) in enumerate(template_columns):
-                        connection.execute(
-                            "INSERT INTO columns(class_id, name, position, width) VALUES (?, ?, ?, ?)",
-                            (class_id, column_name, column_position, width),
-                        )
+                    semester_id = int(cursor.lastrowid)
                 else:
-                    class_id = int(class_row["id"])
+                    semester_id = int(semester_row["id"])
 
-                existing_uids: set[str] = set()
-                for student in self._students(connection, class_id):
-                    values = json.loads(str(student["values_json"]))
-                    uid = str(values.get("uid") or "").strip()
-                    if uid:
-                        existing_uids.add(uid)
+                template_columns = self._default_column_template(connection)
+                created_new_class = False
+                existing_names = {
+                    str(row["name"]) for row in connection.execute("SELECT name FROM classes").fetchall()
+                }
 
-                next_position = connection.execute(
-                    "SELECT COALESCE(MAX(position), -1) + 1 FROM students WHERE class_id = ?",
-                    (class_id,),
-                ).fetchone()[0]
-                for student in group["students"]:
-                    uid = str(student["uid"]).strip()
-                    if not uid or uid in existing_uids:
-                        continue
-                    values: dict[str, Any] = {
-                        "First Name": student["first_name"],
-                        "Last Name": student["last_name"],
-                        "uid": uid,
+                for group in class_groups:
+                    class_row = connection.execute(
+                        "SELECT id FROM classes WHERE semester_id = ? AND external_class_id = ?",
+                        (semester_id, group["external_class_id"]),
+                    ).fetchone()
+                    is_new_class = class_row is None
+                    if is_new_class:
+                        created_new_class = True
+                        position = connection.execute(
+                            "SELECT COALESCE(MAX(position), -1) + 1 FROM classes"
+                        ).fetchone()[0]
+                        sheet_name = safe_sheet_name(
+                            group["name"], group.get("weekly_time", ""), existing_names
+                        )
+                        existing_names.add(sheet_name)
+                        cursor = connection.execute(
+                            """
+                            INSERT INTO classes(name, position, semester_id, external_class_id, weekly_time, subject)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                sheet_name,
+                                position,
+                                semester_id,
+                                group["external_class_id"],
+                                group.get("weekly_time", ""),
+                                group.get("subject", ""),
+                            ),
+                        )
+                        class_id = int(cursor.lastrowid)
+                        for column_position, (column_name, width) in enumerate(template_columns):
+                            connection.execute(
+                                "INSERT INTO columns(class_id, name, position, width) VALUES (?, ?, ?, ?)",
+                                (class_id, column_name, column_position, width),
+                            )
+                    else:
+                        class_id = int(class_row["id"])
+
+                    incoming_uids = {
+                        str(student["uid"]).strip()
+                        for student in group["students"]
+                        if str(student["uid"]).strip()
                     }
-                    if student.get("in_group") is not None:
-                        values["Group Chat"] = bool(student["in_group"])
-                    connection.execute(
-                        "INSERT INTO students(id, class_id, position, values_json) VALUES (?, ?, ?, ?)",
-                        (str(uuid4()), class_id, next_position, json.dumps(values, ensure_ascii=False)),
-                    )
-                    existing_uids.add(uid)
-                    next_position += 1
 
-            if created_new_class:
-                self._create_template_from_database(connection)
+                    existing_by_uid: dict[str, tuple[str, dict[str, Any]]] = {}
+                    for student in self._students(connection, class_id):
+                        values = json.loads(str(student["values_json"]))
+                        uid = str(values.get("uid") or "").strip()
+                        if uid:
+                            existing_by_uid[uid] = (str(student["id"]), values)
+
+                    if overwrite and not is_new_class:
+                        for uid in list(existing_by_uid):
+                            if uid not in incoming_uids:
+                                student_id, _ = existing_by_uid.pop(uid)
+                                connection.execute("DELETE FROM students WHERE id = ?", (student_id,))
+
+                    next_position = connection.execute(
+                        "SELECT COALESCE(MAX(position), -1) + 1 FROM students WHERE class_id = ?",
+                        (class_id,),
+                    ).fetchone()[0]
+                    for student in group["students"]:
+                        uid = str(student["uid"]).strip()
+                        if not uid:
+                            continue
+                        if uid in existing_by_uid:
+                            if overwrite:
+                                student_id, values = existing_by_uid[uid]
+                                values["First Name"] = student["first_name"]
+                                values["Last Name"] = student["last_name"]
+                                if student.get("in_group") is not None:
+                                    values["Group Chat"] = bool(student["in_group"])
+                                connection.execute(
+                                    """
+                                    UPDATE students
+                                    SET values_json = ?, updated_at = CURRENT_TIMESTAMP
+                                    WHERE id = ?
+                                    """,
+                                    (json.dumps(values, ensure_ascii=False), student_id),
+                                )
+                            continue
+                        new_values: dict[str, Any] = {
+                            "First Name": student["first_name"],
+                            "Last Name": student["last_name"],
+                            "uid": uid,
+                        }
+                        if student.get("in_group") is not None:
+                            new_values["Group Chat"] = bool(student["in_group"])
+                        new_student_id = str(uuid4())
+                        connection.execute(
+                            "INSERT INTO students(id, class_id, position, values_json) VALUES (?, ?, ?, ?)",
+                            (new_student_id, class_id, next_position, json.dumps(new_values, ensure_ascii=False)),
+                        )
+                        existing_by_uid[uid] = (new_student_id, new_values)
+                        next_position += 1
+
+                if created_new_class:
+                    self._create_template_from_database(connection)
 
             return plan
 
@@ -1039,6 +1198,39 @@ class SQLiteFeedbackStore:
             output_path = self.export_dir / "Student_Feedback_Export.xlsx"
             self._write_database_to_workbook(output_path)
             return output_path
+
+    def export_summary_report(self) -> Path:
+        """A curated, parent-status-style report: one sheet per class, with only the
+        columns staff actually review day to day, in plain-language Chinese headers.
+        Distinct from export_public_workbook, which is a full raw round-trip copy of
+        every internal column across every class.
+        """
+        workbook = Workbook()
+        try:
+            with self.lock, self._connect() as connection:
+                class_rows = connection.execute(
+                    "SELECT id, name FROM classes ORDER BY position"
+                ).fetchall()
+                for index, class_row in enumerate(class_rows):
+                    worksheet = workbook.active if index == 0 else workbook.create_sheet()
+                    worksheet.title = str(class_row["name"])
+                    for column_index, header in enumerate(REPORT_COLUMNS, start=1):
+                        worksheet.cell(1, column_index).value = header
+
+                    students = self._students(connection, int(class_row["id"]))
+                    for row_index, student in enumerate(students, start=2):
+                        values = json.loads(str(student["values_json"]))
+                        for column_index, value in enumerate(_report_row(values), start=1):
+                            worksheet.cell(row_index, column_index).value = value
+
+            output_path = self.export_dir / "Student_Report_Export.xlsx"
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = output_path.with_suffix(".tmp.xlsx")
+            workbook.save(temporary)
+            temporary.replace(output_path)
+            return output_path
+        finally:
+            workbook.close()
 
 
 

@@ -29,11 +29,15 @@
     const detailEl = byId("busy-detail");
     if (titleEl) titleEl.textContent = title;
     if (detailEl) detailEl.textContent = detail;
-    [elements.importPreview, elements.importCommit, elements.importFile, elements.importSemester].forEach(
-      (control) => {
-        if (control) control.disabled = busy;
-      }
-    );
+    [
+      elements.importPreview,
+      elements.importCommit,
+      elements.importFile,
+      elements.importSemester,
+      elements.importOverwrite,
+    ].forEach((control) => {
+      if (control) control.disabled = busy;
+    });
   }
 
   async function uploadFile(path, file, params) {
@@ -55,6 +59,13 @@
     return payload;
   }
 
+  function removalCount(plan) {
+    return (plan.classes || []).reduce(
+      (total, classPlan) => total + (classPlan.students_to_remove || []).length,
+      0
+    );
+  }
+
   function selectedClassIds() {
     return Array.from(elements.importClasses.querySelectorAll("input[type=checkbox]"))
       .filter((box) => box.checked)
@@ -73,6 +84,7 @@
     plan.classes.forEach((classPlan) => {
       const newCount = classPlan.students.filter((student) => !student.already_present).length;
       const alreadyCount = classPlan.students.length - newCount;
+      const toRemove = classPlan.students_to_remove || [];
 
       const label = document.createElement("label");
       label.className = "import-class";
@@ -93,6 +105,22 @@
       label.appendChild(checkbox);
       label.appendChild(info);
       elements.importClasses.appendChild(label);
+
+      if (toRemove.length) {
+        const removedBlock = document.createElement("div");
+        removedBlock.className = "import-class is-removed";
+        const removedInfo = document.createElement("div");
+        const removedTitle = document.createElement("strong");
+        removedTitle.textContent = `${toRemove.length} student(s) will be PERMANENTLY REMOVED from ${classPlan.name}`;
+        const removedDetail = document.createElement("span");
+        removedDetail.textContent = toRemove
+          .map((student) => `${student.first_name} ${student.last_name} (${student.uid})`)
+          .join(", ");
+        removedInfo.appendChild(removedTitle);
+        removedInfo.appendChild(removedDetail);
+        removedBlock.appendChild(removedInfo);
+        elements.importClasses.appendChild(removedBlock);
+      }
     });
   }
 
@@ -110,9 +138,18 @@
 
     try {
       setBusy(true, "Reading the file", "Matching classes and students against the roster.");
-      const result = await uploadFile("/api/import/preview", file, { semester });
+      const overwrite = elements.importOverwrite.checked;
+      const result = await uploadFile("/api/import/preview", file, {
+        semester,
+        overwrite: overwrite ? "1" : "0",
+      });
       renderPlan(result.plan);
-      toast("Preview ready. Review the classes below before importing.");
+      const removed = removalCount(result.plan);
+      toast(
+        removed
+          ? `Preview ready. ${removed} student(s) would be removed — review before importing.`
+          : "Preview ready. Review the classes below before importing."
+      );
     } catch (error) {
       toast(error.message, true);
     } finally {
@@ -132,14 +169,41 @@
       toast("Select at least one class to import.", true);
       return;
     }
+    const overwrite = elements.importOverwrite.checked;
+    const removed = removalCount(state.plan);
+    const overwriteWarning = overwrite
+      ? `\n\nOverwrite is on: any student in these classes not present in the file will be PERMANENTLY REMOVED${removed ? ` (${removed} shown in the preview)` : ""}.`
+      : "";
     const confirmed = window.confirm(
-      `Import ${classIds.length} class(es) into "${semester}"? This writes new classes and students into the database.`
+      `Import ${classIds.length} class(es) into "${semester}"? This writes new classes and students into the database.${overwriteWarning}`
     );
     if (!confirmed) return;
 
     try {
       setBusy(true, "Importing", "Writing classes and students into the database.");
-      await uploadFile("/api/import/commit", file, { semester, class_ids: classIds.join(",") });
+      let result = await uploadFile("/api/import/commit", file, {
+        semester,
+        class_ids: classIds.join(","),
+        overwrite: overwrite ? "1" : "0",
+      });
+
+      if (result.requires_confirm_delete) {
+        renderPlan(result.plan);
+        const finalConfirm = window.confirm(
+          `This will PERMANENTLY remove ${result.removal_count} student(s) not present in the uploaded file (see the highlighted list below). This cannot be undone from the app, though a database backup is made automatically. Continue?`
+        );
+        if (!finalConfirm) {
+          toast("Import cancelled. Nothing was written.");
+          return;
+        }
+        result = await uploadFile("/api/import/commit", file, {
+          semester,
+          class_ids: classIds.join(","),
+          overwrite: "1",
+          confirm_delete: "1",
+        });
+      }
+
       toast("Import committed. Reloading roster...");
       window.setTimeout(() => window.location.reload(), 800);
     } catch (error) {
@@ -167,6 +231,7 @@
 
   function init() {
     elements.importFile = byId("import-file");
+    elements.importOverwrite = byId("import-overwrite");
     elements.importSemester = byId("import-semester");
     elements.importSemesterOptions = byId("import-semester-options");
     elements.importPreview = byId("import-preview");

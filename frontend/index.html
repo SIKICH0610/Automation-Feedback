@@ -33,6 +33,7 @@
     <div id="roster-view" class="view-panel">
       <div class="sheet-nav">
         <select id="semester-select" class="semester-select" aria-label="Semester" hidden></select>
+        <button id="delete-semester" class="text-button delete-semester-button" type="button" hidden>Delete Semester</button>
         <nav id="sheet-tabs" class="sheet-tabs" aria-label="Class sheets"></nav>
       </div>
 
@@ -68,6 +69,7 @@
               </div>
               <button id="add-row" class="button secondary" type="button">+ Add student</button>
               <button id="export-excel" class="button secondary" type="button">Export Excel</button>
+              <button id="export-report" class="button secondary" type="button">Export Report</button>
               <button id="save-sheet" class="button primary" type="button">Save sheet</button>
             </div>
           </div>
@@ -253,6 +255,14 @@
           </label>
           <button id="import-preview" class="button secondary" type="button">Preview</button>
         </div>
+
+        <label class="import-overwrite-toggle">
+          <input id="import-overwrite" type="checkbox">
+          <span>
+            <strong>Overwrite existing roster</strong>
+            <small>Removes any student on a matched class's roster who is not in this file. Everyone else keeps all their existing feedback and notes untouched. Only affects classes already found in this file, not your whole roster.</small>
+          </span>
+        </label>
 
         <p id="import-empty" class="import-empty">Choose a file and semester, then preview before importing.</p>
 

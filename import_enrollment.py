@@ -133,6 +133,15 @@ def print_plan(plan: dict[str, Any]) -> None:
         print(f"    {len(new_students)} new student(s), {len(already_present)} already on roster")
         for student in new_students:
             print(f"      + {student['first_name']} {student['last_name']} (uid={student['uid']})")
+        to_remove = class_plan.get("students_to_remove") or []
+        if to_remove:
+            print(f"    {len(to_remove)} student(s) WILL BE PERMANENTLY REMOVED (not in the uploaded file):")
+            for student in to_remove:
+                print(f"      - {student['first_name']} {student['last_name']} (uid={student['uid']})")
+
+
+def total_students_to_remove(plan: dict[str, Any]) -> int:
+    return sum(len(class_plan.get("students_to_remove") or []) for class_plan in plan["classes"])
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -161,6 +170,23 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Write the changes. Without this flag, only a preview is printed and nothing is saved.",
     )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help=(
+            "Sync each matched class's roster to exactly match the uploaded file: a student "
+            "currently on the roster but missing from the file is permanently deleted. A "
+            "student present in both is refreshed (name, Group Chat) but keeps all their other "
+            "data (feedback, quiz scores, notes). Without this flag, import only ever adds new "
+            "students and never touches or removes existing ones."
+        ),
+    )
+    parser.add_argument(
+        "--confirm-delete",
+        action="store_true",
+        help="Required together with --overwrite --commit whenever the preview shows students "
+        "that would be removed, as an explicit acknowledgment of permanent deletion.",
+    )
     parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
     parser.add_argument("--workbook", type=Path, default=DEFAULT_WORKBOOK)
     parser.add_argument("--app-data-dir", type=Path, default=DEFAULT_APP_DATA_DIR)
@@ -186,10 +212,27 @@ def main() -> None:
         app_data_dir=args.app_data_dir,
         export_dir=args.export_dir,
     )
+    if args.overwrite and args.commit and not args.confirm_delete:
+        preview_plan = store.import_students(
+            semester_name=args.semester,
+            class_groups=list(groups.values()),
+            commit=False,
+            overwrite=True,
+        )
+        removal_count = total_students_to_remove(preview_plan)
+        if removal_count:
+            print_plan(preview_plan)
+            print()
+            raise SystemExit(
+                f"--overwrite would permanently remove {removal_count} student(s), shown above. "
+                "Re-run with --confirm-delete added to actually do this."
+            )
+
     plan = store.import_students(
         semester_name=args.semester,
         class_groups=list(groups.values()),
         commit=args.commit,
+        overwrite=args.overwrite,
     )
     print_plan(plan)
     print()

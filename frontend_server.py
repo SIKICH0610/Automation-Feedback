@@ -437,6 +437,11 @@ class FrontendHandler(BaseHTTPRequestHandler):
                     raise FrontendError("Enter a semester name first.")
                 class_id_raw = query.get("class_ids", [""])[0]
                 class_ids = {value.strip() for value in class_id_raw.split(",") if value.strip()}
+                overwrite = (query.get("overwrite", [""])[0] or "").strip().lower() in {"1", "true"}
+                confirm_delete = (query.get("confirm_delete", [""])[0] or "").strip().lower() in {
+                    "1",
+                    "true",
+                }
 
                 file_bytes = self._read_binary(MAX_IMPORT_BYTES)
                 with TemporaryDirectory(
@@ -458,10 +463,35 @@ class FrontendHandler(BaseHTTPRequestHandler):
 
                 commit = parsed.path == "/api/import/commit"
                 with self.store.lock:
+                    if commit and overwrite and not confirm_delete:
+                        preview_plan = self.store.import_students(
+                            semester_name=semester_name,
+                            class_groups=list(groups.values()),
+                            commit=False,
+                            overwrite=True,
+                        )
+                        removal_count = sum(
+                            len(class_plan.get("students_to_remove") or [])
+                            for class_plan in preview_plan["classes"]
+                        )
+                        if removal_count:
+                            self._send_json(
+                                200,
+                                {
+                                    "ok": True,
+                                    "plan": preview_plan,
+                                    "committed": False,
+                                    "requires_confirm_delete": True,
+                                    "removal_count": removal_count,
+                                },
+                            )
+                            return
+
                     plan = self.store.import_students(
                         semester_name=semester_name,
                         class_groups=list(groups.values()),
                         commit=commit,
+                        overwrite=overwrite,
                     )
                     if commit:
                         self.store.ensure_announcement_files()
@@ -471,6 +501,14 @@ class FrontendHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/sheet/save":
                 data = self.store.save_sheet(str(payload.get("sheet") or ""), payload.get("rows"))
                 self._send_json(200, {"ok": True, "data": data})
+                return
+            if parsed.path == "/api/semester/delete":
+                semester_name = str(payload.get("semester") or "").strip()
+                if not semester_name:
+                    raise FrontendError("Semester name is required.")
+                confirmed = bool(payload.get("confirm"))
+                plan = self.store.delete_semester(semester_name, commit=confirmed)
+                self._send_json(200, {"ok": True, "plan": plan, "deleted": confirmed})
                 return
             if parsed.path == "/api/announcement/save":
                 path = self.store.write_announcement(
@@ -522,6 +560,17 @@ class FrontendHandler(BaseHTTPRequestHandler):
                         "ok": True,
                         "path": str(export_path),
                         "message": "Excel export created. Editing it will not change the database.",
+                    },
+                )
+                return
+            if parsed.path == "/api/export/report":
+                export_path = self.store.export_summary_report()
+                self._send_json(
+                    200,
+                    {
+                        "ok": True,
+                        "path": str(export_path),
+                        "message": "Report export created. Editing it will not change the database.",
                     },
                 )
                 return

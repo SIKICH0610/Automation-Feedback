@@ -220,6 +220,15 @@ h2 {
   box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.13);
 }
 
+.delete-semester-button {
+  flex: 0 0 auto;
+  color: #b23a3a;
+}
+
+.delete-semester-button:hover {
+  color: #8f2c2c;
+}
+
 .workspace {
   display: grid;
   min-height: calc(100vh - 123px);
@@ -907,6 +916,46 @@ thead th:nth-child(-n+3) {
   margin-top: 18px;
   color: var(--muted);
   font-size: 13px;
+}
+
+.import-overwrite-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.import-overwrite-toggle input {
+  margin-top: 3px;
+}
+
+.import-overwrite-toggle span {
+  display: grid;
+  gap: 2px;
+}
+
+.import-overwrite-toggle strong {
+  font-size: 13px;
+}
+
+.import-overwrite-toggle small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.import-class.is-removed {
+  border-color: #d64545;
+  background: rgba(214, 69, 69, 0.06);
+}
+
+.import-class.is-removed strong {
+  color: #b23a3a;
 }
 
 .import-plan {
