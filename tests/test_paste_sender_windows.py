@@ -4,7 +4,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from paste_sender import PasteJob, WeComPasteRobot, WhatsAppPasteRobot
+from paste_common import PasteJob
+from wecom_win import WeComPasteRobot
+from whatsapp_win import WhatsAppPasteRobot
 
 
 class FakeElement:
@@ -104,9 +106,10 @@ class WindowsPasteRobotTest(unittest.TestCase):
             with self.subTest(robot=robot_type.__name__):
                 window = FakeWindow("Chat", [])
                 robot = bare_robot(robot_type, window)
+                module = robot_type.__module__
                 with (
-                    patch("paste_sender.copy_text_to_clipboard") as copy_text,
-                    patch("paste_sender.time.sleep"),
+                    patch(f"{module}.copy_text_to_clipboard") as copy_text,
+                    patch(f"{module}.time.sleep"),
                 ):
                     robot.search_chat("7916327")
 
@@ -119,9 +122,10 @@ class WindowsPasteRobotTest(unittest.TestCase):
             with self.subTest(robot=robot_type.__name__):
                 robot = bare_robot(robot_type, FakeWindow("Chat", []))
                 robot.focus_window = Mock(side_effect=AssertionError("must not refocus"))
+                module = robot_type.__module__
                 with (
-                    patch("paste_sender.copy_text_to_clipboard") as copy_text,
-                    patch("paste_sender.time.sleep"),
+                    patch(f"{module}.copy_text_to_clipboard") as copy_text,
+                    patch(f"{module}.time.sleep"),
                 ):
                     robot.paste_feedback("A parent update")
 
@@ -134,7 +138,7 @@ class WindowsPasteRobotTest(unittest.TestCase):
         robot.search_result_candidates = Mock(return_value=[])
         robot.search_is_active = Mock(return_value=False)
 
-        with patch("paste_sender.time.sleep"):
+        with patch("wecom_win.time.sleep"):
             robot.open_chat_from_search(paste_job())
 
         robot.send_keys.assert_called_once_with("{ENTER}")
@@ -154,7 +158,7 @@ class WindowsPasteRobotTest(unittest.TestCase):
         robot.search_result_matches = Mock(return_value=False)
         robot.search_is_active = Mock(return_value=False)
 
-        with patch("paste_sender.time.sleep"):
+        with patch("wecom_win.time.sleep"):
             robot.open_chat_from_search(paste_job(channel="whatsapp"))
 
         robot.send_keys.assert_called_once_with("{ENTER}")
@@ -167,7 +171,7 @@ class WindowsPasteRobotTest(unittest.TestCase):
         )
         robot.search_is_active = Mock(side_effect=[True, False])
 
-        with patch("paste_sender.time.sleep"):
+        with patch("wecom_win.time.sleep"):
             robot.open_chat_from_search(paste_job())
 
         keys = [call.args[0] for call in robot.send_keys.call_args_list]
@@ -179,7 +183,7 @@ class WindowsPasteRobotTest(unittest.TestCase):
         robot.wait_for_search_result = Mock(return_value=True)
         robot.search_is_active = Mock(side_effect=[True, False])
 
-        with patch("paste_sender.time.sleep"):
+        with patch("wecom_win.time.sleep"):
             robot.open_chat_from_search(paste_job(channel="whatsapp"))
 
         keys = [call.args[0] for call in robot.send_keys.call_args_list]

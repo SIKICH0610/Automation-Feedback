@@ -292,9 +292,16 @@ install, and `--debug-search-results` prints the candidates the search sees.
 - `geometry_volume1_quiz1_comment_bank.py`, `geometry_volume1_quiz2_comment_bank.py`,
   `amc10_quiz1_comment_bank.py` — default banks used to seed the database.
 
-**Paste automation**
-- `paste_sender.py` — the supervised paste CLI, and the platform dispatch. Never sends.
-- `wecom_mac.py` — WeCom on macOS via the Accessibility API.
+**Paste automation** — one module per app per platform, with `paste_sender.py`
+choosing between them at run time. The Windows modules are imported only on Windows,
+so `pywinauto` is never needed elsewhere.
+
+- `paste_sender.py` — the supervised paste CLI, job building, and the platform
+  dispatch. Never sends.
+- `paste_common.py` — the job/status types and clipboard helpers every robot shares.
+- `wecom_win.py` / `wecom_mac.py` — WeCom, via UI Automation and the Accessibility
+  API respectively.
+- `whatsapp_win.py` — WhatsApp on Windows.
 - `whatsapp_mac.py` — in-progress WhatsApp support for macOS; not wired up yet.
 - `paste_comment.py`, `paste_mass_notification.py` — which text a row should paste.
 - `paste_attachments.py` — Windows file-clipboard staging.
