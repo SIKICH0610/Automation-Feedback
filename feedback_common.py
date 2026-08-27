@@ -292,25 +292,34 @@ def soften_zh(text: str) -> str:
     return stripped + "～"
 
 
-def class_review_paragraph(class_review: str, is_chinese: bool) -> str:
+def class_review_paragraph(class_review: str, is_chinese: bool, *, kind: str = "lesson") -> str:
+    """Paragraph 1. kind="lesson" wraps a bare topic list in the lesson sentence frame;
+    kind="quiz" leaves the teacher's quiz write-up alone, since that frame turns
+    "满分 8 分，班级平均 6.9/8" into "课程主要围绕满分 8 分...展开"."""
     class_review = class_review.strip()
 
     if is_chinese:
         if not class_review:
+            if kind == "quiz":
+                return "家长您好～这次 quiz 的情况如下～"
             return "家长您好～我们今天的课程主要围绕本节的核心知识点、例题讲解和课堂练习展开～"
         if class_review.startswith("家长"):
             return soften_zh(class_review)
-        if class_review.endswith(ZH_RECAP_SENTENCE_ENDINGS):
+        if kind == "quiz" or class_review.endswith(ZH_RECAP_SENTENCE_ENDINGS):
             return f"家长您好～{soften_zh(class_review)}"
         return f"家长您好～我们今天的课程主要围绕{class_review}展开～"
 
     if not class_review:
+        if kind == "quiz":
+            return "Hello! Here is how this quiz went."
         return (
             "Hello! In today's class, we reviewed the main ideas for the lesson, "
             "worked through examples, and practiced applying the methods in class."
         )
     if class_review.lower().startswith("hello"):
         return class_review
+    if kind == "quiz":
+        return f"Hello! {class_review}" + ("" if class_review.endswith((".", "!", "?")) else ".")
     if class_review.endswith((".", "!", "?")):
         return f"Hello! {class_review}"
     return f"Hello! In today's class, we focused on {class_review}."
@@ -364,24 +373,6 @@ def append_parent_closing(text: str, is_chinese: bool) -> str:
     if closing in cleaned:
         return cleaned
     return f"{cleaned}\n\n{closing}"
-
-
-def sentence_join_zh(items: list[str]) -> str:
-    if not items:
-        return ""
-    if len(items) == 1:
-        return items[0]
-    sentences = [items[0]]
-    for item in items[1:]:
-        if "也" in item or item.startswith(("同时", "特别", "可以", "继续")):
-            sentences.append(item)
-        elif "还需要" in item:
-            sentences.append(item.replace("还需要", "也需要", 1))
-        elif "需要" in item:
-            sentences.append(item.replace("需要", "也需要", 1))
-        else:
-            sentences.append(item)
-    return "。".join(sentences)
 
 
 def join_naturally(items: list[str], language: str) -> str:

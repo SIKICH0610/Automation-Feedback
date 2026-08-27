@@ -173,6 +173,14 @@
                   <button class="segment" data-quiz="2" type="button">Quiz 2</button>
                 </div>
               </div>
+              <div class="quiz-recap-block">
+                <div class="quiz-recap-heading">
+                  <label id="quiz-recap-label" for="quiz-recap-text">Quiz 1 recap 本次 quiz 回顾</label>
+                  <button id="save-quiz-recap" class="button secondary small" type="button">Save</button>
+                </div>
+                <textarea id="quiz-recap-text" rows="4" placeholder="本次 quiz 的范围和整体情况，例如：满分 8 分，7 道选择 + 1 道证明，班级平均 6.9/8"></textarea>
+                <p class="field-hint">Used as paragraph 1 of this quiz's feedback. Each quiz keeps its own recap.</p>
+              </div>
               <button class="action-button generate" data-action="generate-quiz-feedback" type="button">
                 <span>Generate quiz feedback</span>
                 <small id="quiz-generate-target">Writes to Quiz1 Feedback</small>

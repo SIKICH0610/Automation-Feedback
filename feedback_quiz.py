@@ -14,7 +14,6 @@ from feedback_common import (
     StudentRow,
     additional_comment_for_local_message,
     join_naturally,
-    sentence_join_zh,
     value_from_any_column,
 )
 from amc10_quiz1_comment_bank import build_amc10_quiz1_comment
@@ -197,9 +196,21 @@ def second_quiz_text(student: StudentRow) -> str:
 def second_quiz_average_text(student: StudentRow) -> str:
     return value_from_any_column(student, SECOND_QUIZ_AVERAGE_COLUMNS)
 
-def selected_quiz_bank(student: StudentRow) -> str:
+def selected_quiz_bank(student: StudentRow, quiz_number: str | None = None) -> str:
+    """Which quiz this comment is about.
+
+    quiz_number is what the teacher actually picked in the UI and always wins. The
+    guessing below is only for callers that have no such choice (the CLI, and
+    comprehensive feedback): it infers from the row's own data, which silently
+    reported Quiz 2's score inside a Quiz 1 message once a student had both.
+    """
     configured_bank = value_from_any_column(student, QUIZ_BANK_COLUMNS).lower()
-    if "amc10" in configured_bank or "amc 10" in configured_bank:
+    is_amc10 = "amc10" in configured_bank or "amc 10" in configured_bank
+    if quiz_number == "2":
+        return "quiz2"
+    if quiz_number == "1":
+        return "amc10_quiz1" if is_amc10 else "quiz1"
+    if is_amc10:
         return "amc10_quiz1"
     if "2" in configured_bank or "second" in configured_bank:
         return "quiz2"
@@ -216,8 +227,8 @@ def quiz_mistake_note(student: StudentRow, quiz_bank: str) -> str:
         return value_from_any_column(student, (*QUIZ2_MISTAKE_COLUMNS, *QUIZ_MISTAKE_COLUMNS))
     return value_from_any_column(student, (*QUIZ1_MISTAKE_COLUMNS, *QUIZ_MISTAKE_COLUMNS))
 
-def quiz_bank_comment(student: StudentRow, is_chinese: bool) -> str:
-    quiz_bank = selected_quiz_bank(student)
+def quiz_bank_comment(student: StudentRow, is_chinese: bool, quiz_number: str | None = None) -> str:
+    quiz_bank = selected_quiz_bank(student, quiz_number)
     note = quiz_mistake_note(student, quiz_bank)
     if not note:
         return ""
@@ -311,6 +322,7 @@ QUIZ_FOCUS_CATEGORIES = {
         "pattern": r"计算|算|accuracy|accurate|careless|detail|细节|不仔细",
         "negative": r"计算.{0,8}(不|错|需要|仔细)|细节.{0,8}(不|需要)|careless|calculation.{0,16}(need|error|mistake)",
         "positive": r"准确|不错|很好|good|accurate|strong|solid",
+        "zh_area": "计算的准确性和细节检查",
         "zh_positive": "计算准确性整体比较稳定",
         "zh_needs": "计算细节需要更加仔细",
         "en_positive": "maintaining solid calculation accuracy",
@@ -320,6 +332,7 @@ QUIZ_FOCUS_CATEGORIES = {
         "pattern": r"证明|proof|reason|理由|步骤|过程|严谨|rigor|concise|完整|漏",
         "negative": r"证明.{0,8}(不|需要|错|漏|欠缺|不够)|proof.{0,16}(need|missing|unclear)|reason.{0,12}(需要|欠缺|unclear|missing)|步骤.{0,8}(漏|不完整|需要)|过程.{0,8}(不完整|需要)",
         "positive": r"严谨|完整|不错|很好|strong|good|rigor|concise|solid",
+        "zh_area": "证明书写的规范性和步骤完整性",
         "zh_positive": "证明书写方面已经有不错的基础",
         "zh_needs": "证明书写需要更加规范，步骤和理由要写完整",
         "en_positive": "continuing to build on a solid foundation in proof writing",
@@ -329,6 +342,7 @@ QUIZ_FOCUS_CATEGORIES = {
         "pattern": r"平行|角|全等|triangle|congruent|HL|SAS|SSA|angle|parallel",
         "negative": r"关系.{0,8}(不|需要|错|混)|定理.{0,8}(不|需要|错|混)|角.{0,8}(不|需要|错|混)|triangle.{0,16}(need|unclear|mistake)|theorem.{0,16}(need|unclear|mistake)",
         "positive": r"掌握|稳定|不错|很好|good|strong|solid|understand",
+        "zh_area": "图形关系和定理的使用",
         "zh_positive": "图形关系和定理使用整体比较稳定",
         "zh_needs": "图形关系和定理使用还可以继续巩固",
         "en_positive": "showing steady use of diagram relationships and theorems",
@@ -338,6 +352,7 @@ QUIZ_FOCUS_CATEGORIES = {
         "pattern": r"课堂|专注|分心|提醒|参与|打扰|focus|participat|attention|habit|distract",
         "negative": r"分心|提醒|打扰|不专注|课堂.{0,8}(习惯|提醒|打扰)|distract|remind|attention.{0,12}(need|issue)",
         "positive": r"专注|积极|主动|认真|focused|active|participat",
+        "zh_area": "课堂专注和参与度",
         "zh_positive": "课堂专注和参与度整体不错",
         "zh_needs": "课堂专注和课堂习惯方面还可以继续调整",
         "en_positive": "maintaining steady focus and class participation",
@@ -357,8 +372,24 @@ def focus_points_from_categories(text: str, language: str) -> list[str]:
         points.append(category[f"{language}_{tone}"])
     return list(dict.fromkeys(points))
 
-def chinese_quiz_focus_sentences(remark: str) -> list[str]:
-    return focus_points_from_categories(remark, "zh")
+def chinese_focus_areas(remark: str) -> tuple[list[str], list[str]]:
+    """(areas already going well, areas to work on), as noun phrases.
+
+    The zh_positive / zh_needs strings are whole clauses, so dropping them into
+    "可以重点关注..." produced "重点关注计算准确性整体比较稳定". The Chinese wording uses
+    these bare areas and supplies its own verb instead; English keeps the clauses,
+    which already read correctly after "can build from this by".
+    """
+    positives: list[str] = []
+    needs: list[str] = []
+    for category in QUIZ_FOCUS_CATEGORIES.values():
+        if not re.search(category["pattern"], remark, flags=re.IGNORECASE):
+            continue
+        is_positive = bool(re.search(category["positive"], remark, flags=re.IGNORECASE))
+        is_negative = bool(re.search(category["negative"], remark, flags=re.IGNORECASE))
+        bucket = positives if is_positive and not is_negative else needs
+        bucket.append(category["zh_area"])
+    return list(dict.fromkeys(positives)), list(dict.fromkeys(needs))
 
 def english_quiz_focus_sentences(remark: str) -> list[str]:
     return focus_points_from_categories(remark, "en")
@@ -369,12 +400,13 @@ def quiz_comment_paragraph(
     is_chinese: bool,
     *,
     include_observations: bool = False,
+    quiz_number: str | None = None,
 ) -> str | None:
     remark = str(student.values.get("Remark for Student") or "").strip()
-    quiz_bank = selected_quiz_bank(student)
+    quiz_bank = selected_quiz_bank(student, quiz_number)
     first_quiz_sentence = first_quiz_score_sentence(student, is_chinese)
     second_quiz_sentence = second_quiz_score_sentence(student, is_chinese)
-    bank_comment = quiz_bank_comment(student, is_chinese)
+    bank_comment = quiz_bank_comment(student, is_chinese, quiz_number)
     has_remark_quiz_signal = "quiz" in remark.lower() or bool(re.search(r"\d+(?:\.\d+)?\s*/\s*\d+", remark))
     if not has_remark_quiz_signal and not first_quiz_sentence and not second_quiz_sentence and not bank_comment:
         return None
@@ -394,13 +426,19 @@ def quiz_comment_paragraph(
         if bank_comment:
             sentences.append(bank_comment)
 
-        focus = [] if bank_comment else chinese_quiz_focus_sentences(remark)
-        if focus:
-            focus_text = sentence_join_zh(focus)
-            if score is not None and score >= 7.5:
-                sentences.append(f"{name} 这次表现比较扎实，后续可以继续保持，尤其是{focus_text}。")
-            else:
-                sentences.append(f"从这次 quiz 和课堂情况来看，{name} 接下来可以重点关注{focus_text}。")
+        doing_well, to_work_on = ([], []) if bank_comment else chinese_focus_areas(remark)
+        if doing_well or to_work_on:
+            parts: list[str] = []
+            if doing_well:
+                strong = "、".join(doing_well)
+                if score is not None and score >= 7.5:
+                    parts.append(f"{name} 这次表现比较扎实，{strong}方面可以继续保持")
+                else:
+                    parts.append(f"{name} 在{strong}方面已经比较稳定")
+            if to_work_on:
+                lead = "接下来" if doing_well else f"从这次 quiz 和课堂情况来看，{name} 接下来"
+                parts.append(f"{lead}可以重点关注{'、'.join(to_work_on)}")
+            sentences.append("，".join(parts) + "。")
         else:
             if has_remark_quiz_signal and remark and not bank_comment:
                 sentences.append(f"老师已经把{name}本次 quiz 相关的课堂记录整理进反馈，后续会继续结合错题类型和证明书写情况进行跟进。")

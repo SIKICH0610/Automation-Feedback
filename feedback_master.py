@@ -36,6 +36,9 @@ def comprehensive_comment_paragraph(student: StudentRow, observations: list[str]
 @dataclass
 class FeedbackGenerator:
     class_review: str = ""
+    # "1" / "2" when the teacher picked a quiz in the UI; None lets the row's own
+    # data decide, which is all the CLI and comprehensive feedback can do.
+    quiz_number: str | None = None
 
     def is_chinese(self, student: StudentRow) -> bool:
         return student.language.lower().startswith("chinese")
@@ -47,8 +50,9 @@ class FeedbackGenerator:
             if (phrase := phrase_for(field, student.values.get(field), student.language))
         ]
 
-    def class_paragraph(self, student: StudentRow) -> str:
-        return class_review_paragraph(self.class_review, self.is_chinese(student))
+    def class_paragraph(self, student: StudentRow, feedback_type: str = "comprehensive") -> str:
+        kind = "quiz" if feedback_type == "quiz" else "lesson"
+        return class_review_paragraph(self.class_review, self.is_chinese(student), kind=kind)
 
     def general_personal_paragraph(self, student: StudentRow) -> str:
         return general_comment_paragraph(
@@ -63,6 +67,7 @@ class FeedbackGenerator:
             self.observations_for_student(student),
             self.is_chinese(student),
             include_observations=False,
+            quiz_number=self.quiz_number,
         )
         if quiz_comment:
             return quiz_comment
@@ -105,7 +110,7 @@ class FeedbackGenerator:
             )
 
         is_chinese = self.is_chinese(student)
-        class_paragraph = self.class_paragraph(student)
+        class_paragraph = self.class_paragraph(student, feedback_type)
         homework = homework_paragraph(student, is_chinese)
         personal_paragraphs = self.personal_paragraphs(student, feedback_type)
 
@@ -134,7 +139,9 @@ def generate_feedback(
     class_review: str = "",
     *,
     feedback_type: str = "comprehensive",
+    quiz_number: str | None = None,
 ) -> str | None:
     return FeedbackGenerator(
         class_review=class_review,
+        quiz_number=quiz_number,
     ).generate(student, feedback_type=feedback_type)

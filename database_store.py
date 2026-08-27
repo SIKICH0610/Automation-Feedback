@@ -372,6 +372,11 @@ class SQLiteFeedbackStore:
             # row rather than in a file like the announcement, so it cannot go stale when
             # a class is renamed and is removed automatically when the class is deleted.
             "lesson_recap": "TEXT",
+            # Each quiz gets its own intro, written and sent separately. Sharing one
+            # recap across quizzes put the Quiz 1 write-up at the top of the Quiz 2
+            # message, since paragraph 1 is whatever recap the run was given.
+            "quiz1_recap": "TEXT",
+            "quiz2_recap": "TEXT",
         }
         for column_name, definition in additions.items():
             if column_name not in existing:
@@ -857,6 +862,34 @@ class SQLiteFeedbackStore:
             )
         return cleaned
 
+    @staticmethod
+    def _quiz_recap_column(quiz_number: Any) -> str:
+        number = str(quiz_number or "").strip()
+        if number not in {"1", "2"}:
+            raise StoreError("Quiz number must be 1 or 2.")
+        return f"quiz{number}_recap"
+
+    def read_quiz_recap(self, sheet_name: str, quiz_number: Any) -> str:
+        column = self._quiz_recap_column(quiz_number)
+        with self.lock, self._connect() as connection:
+            class_row = self._class_row(connection, sheet_name)
+            row = connection.execute(
+                f"SELECT {column} FROM classes WHERE id = ?",
+                (int(class_row["id"]),),
+            ).fetchone()
+        return str(row[column] or "") if row else ""
+
+    def write_quiz_recap(self, sheet_name: str, quiz_number: Any, text: str) -> str:
+        column = self._quiz_recap_column(quiz_number)
+        cleaned = str(text or "").strip()
+        with self.lock, self._connect() as connection:
+            class_row = self._class_row(connection, sheet_name)
+            connection.execute(
+                f"UPDATE classes SET {column} = ? WHERE id = ?",
+                (cleaned, int(class_row["id"])),
+            )
+        return cleaned
+
     def read_announcement(self, sheet_name: str) -> tuple[str, Path]:
         path = self.announcement_path(sheet_name)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -933,6 +966,10 @@ class SQLiteFeedbackStore:
             "announcement": announcement,
             "announcement_path": str(announcement_path),
             "lesson_recap": self.read_lesson_recap(sheet_name),
+            "quiz_recaps": {
+                "1": self.read_quiz_recap(sheet_name, "1"),
+                "2": self.read_quiz_recap(sheet_name, "2"),
+            },
             "attachments": self.list_attachments(sheet_name),
         }
 

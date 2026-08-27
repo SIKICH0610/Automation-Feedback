@@ -16,6 +16,8 @@ const state = {
   dirty: false,
   announcementDirty: false,
   recapDirty: false,
+  quizRecaps: { "1": "", "2": "" },
+  quizRecapDirty: false,
   attachments: [],
   selectedAttachments: new Set(),
   bulkUnchecked: new Set(),
@@ -82,6 +84,7 @@ function setSaveState(label, kind = "neutral") {
 function markDirty(kind = "sheet") {
   if (kind === "announcement") state.announcementDirty = true;
   else if (kind === "recap") state.recapDirty = true;
+  else if (kind === "quizRecap") state.quizRecapDirty = true;
   else state.dirty = true;
   setSaveState("Unsaved changes", "dirty");
 }
@@ -261,7 +264,7 @@ async function deleteStudent(row) {
     setBusy(true, "Deleting student", name);
     // Any unsaved edits to other rows must be saved first -- the delete goes straight
     // to the database and reloading afterward would otherwise silently drop them.
-    if (state.dirty || state.announcementDirty || state.recapDirty) await saveAll({ quiet: true });
+    if (state.dirty || state.announcementDirty || state.recapDirty || state.quizRecapDirty) await saveAll({ quiet: true });
     const payload = await api("/api/student/delete", {
       method: "POST",
       body: JSON.stringify({ sheet: state.sheetName, student_id: row.student_id }),
@@ -708,7 +711,7 @@ async function openSearchResult(result) {
   if (state.busy) return;
   try {
     setBusy(true, "Opening student", `${result.full_name} in ${result.sheet}`);
-    if (state.dirty || state.announcementDirty || state.recapDirty) await saveAll({ quiet: true });
+    if (state.dirty || state.announcementDirty || state.recapDirty || state.quizRecapDirty) await saveAll({ quiet: true });
     if (result.sheet !== state.sheetName) await loadSheet(result.sheet);
 
     state.searchScope = "current";
@@ -886,6 +889,25 @@ function renderQuizTarget() {
   document.querySelectorAll(".segment").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.quiz === state.quizNumber);
   });
+  elements.quizRecapLabel.textContent = `Quiz ${state.quizNumber} recap 本次 quiz 回顾`;
+  elements.quizRecapText.value = state.quizRecaps[state.quizNumber] || "";
+}
+
+// Switching quizzes swaps which recap the one box is editing, so whatever is on
+// screen has to be banked against the quiz it was typed for first.
+async function switchQuizNumber(quizNumber) {
+  if (quizNumber === state.quizNumber) return;
+  state.quizRecaps[state.quizNumber] = elements.quizRecapText.value;
+  if (state.quizRecapDirty) {
+    try {
+      await saveQuizRecap({ quiet: true });
+    } catch (error) {
+      toast(error.message, true);
+      return;
+    }
+  }
+  state.quizNumber = quizNumber;
+  renderQuizTarget();
 }
 
 function applySheetData(data, preserve = null) {
@@ -916,6 +938,9 @@ function applySheetData(data, preserve = null) {
   elements.announcementPath.title = data.announcement_path || "";
   elements.recapText.value = data.lesson_recap || "";
   state.recapDirty = false;
+  state.quizRecaps = { "1": "", "2": "", ...(data.quiz_recaps || {}) };
+  state.quizRecapDirty = false;
+  renderQuizTarget();
   state.attachments = data.attachments || [];
   state.selectedAttachments = new Set(state.attachments.map((attachment) => attachment.id));
   state.dirty = false;
@@ -947,7 +972,7 @@ async function loadSheet(sheetName, preserve = null) {
 async function switchSheet(sheetName) {
   if (state.busy || sheetName === state.sheetName) return;
   try {
-    if (state.dirty || state.announcementDirty || state.recapDirty) await saveAll({ quiet: true });
+    if (state.dirty || state.announcementDirty || state.recapDirty || state.quizRecapDirty) await saveAll({ quiet: true });
     setBusy(true, "Opening class", sheetName);
     await loadSheet(sheetName);
   } catch (error) {
@@ -985,6 +1010,19 @@ async function saveLessonRecap({ quiet = false } = {}) {
   if (!quiet) toast("Lesson recap saved.");
 }
 
+async function saveQuizRecap({ quiet = false } = {}) {
+  if (!state.quizRecapDirty && quiet) return;
+  const quizNumber = state.quizNumber;
+  const text = elements.quizRecapText.value;
+  await api("/api/quiz-recap/save", {
+    method: "POST",
+    body: JSON.stringify({ sheet: state.sheetName, quiz_number: quizNumber, text }),
+  });
+  state.quizRecaps[quizNumber] = text;
+  state.quizRecapDirty = false;
+  if (!quiet) toast(`Quiz ${quizNumber} recap saved.`);
+}
+
 async function saveSheet({ quiet = false } = {}) {
   if (!state.dirty && quiet) return;
   const preserve = preservedSelection();
@@ -1020,10 +1058,12 @@ async function saveAll({ quiet = false } = {}) {
   try {
     await saveAnnouncement({ quiet: true });
     await saveLessonRecap({ quiet: true });
+    await saveQuizRecap({ quiet: true });
     await saveSheet({ quiet: true });
     state.dirty = false;
     state.announcementDirty = false;
     state.recapDirty = false;
+    state.quizRecapDirty = false;
     setSaveState("Saved", "saved");
     if (!quiet) toast("All changes saved.");
   } catch (error) {
@@ -1205,12 +1245,23 @@ function bindEvents() {
     }
   });
   elements.recapText.addEventListener("input", () => markDirty("recap"));
+  elements.quizRecapText.addEventListener("input", () => markDirty("quizRecap"));
+  elements.saveQuizRecap.addEventListener("click", async () => {
+    try {
+      setBusy(true, "Saving quiz recap", `Quiz ${state.quizNumber}`);
+      await saveQuizRecap();
+      if (!state.dirty) setSaveState("Saved", "saved");
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      setBusy(false);
+    }
+  });
   elements.addAttachment.addEventListener("click", () => elements.attachmentInput.click());
   elements.attachmentInput.addEventListener("change", () => uploadAttachments(elements.attachmentInput.files));
   document.querySelectorAll(".segment").forEach((button) => {
     button.addEventListener("click", () => {
-      state.quizNumber = button.dataset.quiz;
-      renderQuizTarget();
+      switchQuizNumber(button.dataset.quiz);
     });
   });
   document.querySelectorAll("[data-action]").forEach((button) => {
@@ -1225,7 +1276,7 @@ function bindEvents() {
     }
   });
   window.addEventListener("beforeunload", (event) => {
-    if (!state.dirty && !state.announcementDirty && !state.recapDirty) return;
+    if (!state.dirty && !state.announcementDirty && !state.recapDirty && !state.quizRecapDirty) return;
     event.preventDefault();
     event.returnValue = "";
   });
@@ -1273,6 +1324,9 @@ async function initialize() {
     "attachmentList",
     "attachmentEmpty",
     "quizGenerateTarget",
+    "quizRecapLabel",
+    "quizRecapText",
+    "saveQuizRecap",
     "quizPasteTarget",
     "activityLog",
     "clearLog",

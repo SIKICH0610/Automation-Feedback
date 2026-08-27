@@ -223,6 +223,11 @@ def build_parser(*, default_feedback_type: str = "comprehensive") -> argparse.Ar
         help="Optional Chinese class review file for Chinese parent messages.",
     )
     parser.add_argument(
+        "--quiz-number",
+        choices=("1", "2"),
+        help="Which quiz this run is about. Without it, the quiz is inferred from each row.",
+    )
+    parser.add_argument(
         "--class-review-file-en",
         type=Path,
         help="Optional English class review file for English parent messages.",
@@ -335,6 +340,7 @@ def main(*, default_feedback_type: str = "comprehensive") -> None:
             student,
             class_review=student_class_review,
             feedback_type=args.feedback_type,
+            quiz_number=args.quiz_number,
         )
         print_student_result(student, feedback)
 

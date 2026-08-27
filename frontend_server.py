@@ -194,7 +194,14 @@ class ActionRunner:
                     "quiz",
                     "--feedback-column",
                     feedback_column,
-                    *class_review_args,
+                    # Paragraph 1 comes from this quiz's own recap, not the lesson
+                    # recap -- each quiz is written up and sent separately.
+                    "--class-review",
+                    self.store.read_quiz_recap(sheet_name, quiz_number),
+                    # Without this the quiz is inferred from the row, which reported
+                    # Quiz 2's score inside a Quiz 1 message for a student with both.
+                    "--quiz-number",
+                    quiz_number,
                     "--calculate-quiz-average",
                     "--quiz-score-column",
                     score_column,
@@ -729,6 +736,19 @@ class FrontendHandler(BaseHTTPRequestHandler):
                     str(payload.get("text") or ""),
                 )
                 self._send_json(200, {"ok": True, "lesson_recap": recap})
+                return
+            if parsed.path == "/api/quiz-recap/save":
+                sheet_name = str(payload.get("sheet") or "")
+                quiz_number = str(payload.get("quiz_number") or "")
+                recap = self.store.write_quiz_recap(
+                    sheet_name,
+                    quiz_number,
+                    str(payload.get("text") or ""),
+                )
+                self._send_json(
+                    200,
+                    {"ok": True, "quiz_number": quiz_number, "quiz_recap": recap},
+                )
                 return
             if parsed.path == "/api/quiz-bank/save":
                 bank = self.store.save_quiz_bank(
