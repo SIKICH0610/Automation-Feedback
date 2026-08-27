@@ -6,8 +6,6 @@ from typing import Any
 
 from openpyxl import load_workbook
 
-from openai_api import DEFAULT_OPENAI_MODEL, create_response
-
 
 PROJECT_DIR = Path(__file__).resolve().parent
 DEFAULT_WORKBOOK = PROJECT_DIR / "Geo_TTh_Student_Script_fixed_rows_only.xlsx"
@@ -43,32 +41,6 @@ QUIZ_MISTAKE_COLUMNS = (
     "Quiz Mistakes",
 )
 FEEDBACK_TYPE_CHOICES = ("comprehensive", "general", "quiz")
-
-
-PARENT_COMMENT_STYLE_GUIDE = """
-Write like a real teacher leaving a thoughtful parent update.
-Blend quiz performance, classroom behavior, and next steps into natural paragraphs.
-Do not use label-style sections, checklist wording, or repeated sentence frames.
-Avoid structures like "Regarding the student's performance" or "The main suggestions are".
-When several areas need work, vary the phrasing so it sounds spoken rather than copied from a template.
-Use natural sentence breaks instead of colons or semicolons.
-End with the standard group-chat question sentence.
-""".strip()
-
-ZH_PARENT_COMMENT_STYLE_GUIDE = """
-中文家长反馈要像老师真实写给家长的消息。
-开头可以保留“家长您好”，之后不要反复说“家长”，统一用“您”。
-不要写成“关于某某的课堂表现”或“建议后续关注”这种模板句。
-如果有多个需要改进的地方，第二个及之后可以自然加入“也”，例如“计算细节也需要更加仔细”。
-语气要具体、温和、顺口，像在群里发给家长的说明。
-""".strip()
-
-EN_PARENT_COMMENT_STYLE_GUIDE = """
-English parent feedback should sound like a natural teacher update.
-Do not use report-style labels or repeated template openings.
-Connect the quiz result, class habits, and next step in a smooth paragraph.
-Keep the tone warm, direct, and parent-friendly.
-""".strip()
 
 
 EN_PHRASES = {
@@ -283,32 +255,6 @@ def phrase_for(field: str, value: Any, language: str) -> str | None:
     return phrases.get(field, {}).get(text, text)
 
 
-def target_language(student: StudentRow) -> str:
-    if student.language.lower().startswith("chinese"):
-        return "Chinese"
-    return "English"
-
-
-def revise_remark_with_gpt(student: StudentRow, model: str) -> str:
-    remark = str(student.values.get("Remark for Student") or "").strip()
-    if not remark:
-        return ""
-
-    prompt = f"""
-You are revising a teacher's private classroom note before it is saved back to the spreadsheet.
-
-Keep the meaning and all important details.
-The teacher note may be informal Chinese. Revise it into smooth, concise Chinese.
-Do not add a greeting, parent-facing wording, homework, or information not in the note.
-Output only the revised Chinese note.
-
-Student: {student.full_name}
-Original note:
-{remark}
-""".strip()
-    return create_response(prompt, model=model)
-
-
 def additional_comment_for_local_message(student: StudentRow, is_chinese: bool) -> str:
     additional_comment = str(student.values.get(ADDITIONAL_COMMENT_COLUMN) or "").strip()
     if not additional_comment:
@@ -326,70 +272,6 @@ def value_from_any_column(student: StudentRow, column_names: tuple[str, ...]) ->
         if value:
             return value
     return ""
-
-
-def personal_feedback_with_gpt(
-    student: StudentRow,
-    *,
-    observations: list[str],
-    local_comment: str,
-    homework: str | None,
-    model: str,
-    feedback_type: str = "comprehensive",
-) -> str:
-    language = target_language(student)
-    remark = str(student.values.get("Remark for Student") or "").strip()
-    additional_comment = str(student.values.get(ADDITIONAL_COMMENT_COLUMN) or "").strip()
-    homework_text = homework or ""
-    language_style = (
-        ZH_PARENT_COMMENT_STYLE_GUIDE
-        if language.lower().startswith("chinese")
-        else EN_PARENT_COMMENT_STYLE_GUIDE
-    )
-
-    prompt = f"""
-You are writing the student-specific part of a parent class update.
-
-Write in {language}.
-Follow this teacher style guide:
-{PARENT_COMMENT_STYLE_GUIDE}
-
-Language-specific style guide:
-{language_style}
-
-Do not mention "not observed".
-Do not include attendance.
-Do not include the class material paragraph.
-Do not end with generic thanks or "thank you for your cooperation".
-If Additional Comment is provided, translate it if needed and add it naturally to the end of paragraph 2.
-Feedback mode: {feedback_type}.
-For general mode, focus on regular classroom feedback and teacher-written notes rather than quiz scores.
-For quiz mode, focus on quiz scores, proof-writing issues, and quiz-specific next steps.
-For comprehensive mode, include both quiz information and regular classroom feedback.
-End with this sentence in Chinese messages: 如果您还有任何问题，可以直接在群里问我，我会尽快回复。
-End with this sentence in English messages: If you have any questions, feel free to ask me directly in the group chat. I will reply as soon as possible.
-
-Output paragraph 2 as the personal comment.
-If homework feedback is provided, add paragraph 3 as homework feedback.
-If there is no homework feedback, output only paragraph 2.
-
-Student: {student.full_name}
-Teacher remark, usually in Chinese:
-{remark}
-
-Additional Comment:
-{additional_comment or "None"}
-
-Structured observations:
-{join_naturally(observations, student.language) or "None"}
-
-Local fallback draft:
-{local_comment}
-
-Homework feedback:
-{homework_text or "None"}
-""".strip()
-    return create_response(prompt, model=model)
 
 
 # The teacher writes only the topics covered ("三角形全等的判定、勾股定理的应用"), and

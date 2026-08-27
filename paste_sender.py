@@ -24,7 +24,6 @@ from feedback_common import (
     normalize_uid,
     student_from_worksheet,
 )
-from openai_api import DEFAULT_OPENAI_MODEL
 from paste_comment import comment_payload_for_student
 from paste_mass_notification import mass_notification_payload_for_student, resolve_mass_message
 from paste_attachments import normalized_attachment_paths, stage_attachments
@@ -537,8 +536,6 @@ def payload_for_student(
     student: StudentRow,
     *,
     class_review: str,
-    use_api: bool,
-    model: str,
     message_column: str = "Feedback",
     feedback_type: str,
     action: str,
@@ -551,8 +548,6 @@ def payload_for_student(
     return comment_payload_for_student(
         student,
         class_review=class_review,
-        use_api=use_api,
-        model=model,
         feedback_type=feedback_type,
         message_column=message_column,
     )
@@ -562,8 +557,6 @@ def build_paste_job(
     student: StudentRow,
     *,
     class_review: str,
-    use_api: bool,
-    model: str,
     message_column: str = "Feedback",
     feedback_type: str,
     action: str,
@@ -597,8 +590,6 @@ def build_paste_job(
         feedback=payload_for_student(
             student,
             class_review=class_review,
-            use_api=use_api,
-            model=model,
             message_column=message_column,
             feedback_type=feedback_type,
             action=action,
@@ -650,8 +641,6 @@ def load_jobs(
     row_numbers: list[int],
     class_review_zh: str,
     class_review_en: str,
-    use_api: bool,
-    model: str,
     message_column: str = "Feedback",
     feedback_type: str,
     action: str,
@@ -685,8 +674,6 @@ def load_jobs(
                 build_paste_job(
                     student,
                     class_review=student_class_review,
-                    use_api=use_api,
-                    model=model,
                     message_column=message_column,
                     feedback_type=feedback_type,
                     action=action,
@@ -1355,8 +1342,6 @@ def build_parser(
         default=[],
         help="Image or document to stage in the chat preview. Repeat for multiple files.",
     )
-    parser.add_argument("--use-api", action="store_true")
-    parser.add_argument("--model", default=DEFAULT_OPENAI_MODEL)
     parser.add_argument(
         "--status",
         action="store_true",
@@ -2069,8 +2054,6 @@ def main(
         row_numbers=selected_row_numbers(args),
         class_review_zh=class_review_zh,
         class_review_en=class_review_en,
-        use_api=args.use_api,
-        model=args.model,
         message_column=args.message_column,
         feedback_type=args.feedback_type,
         action=args.action,

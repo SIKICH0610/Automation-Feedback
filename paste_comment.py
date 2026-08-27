@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from openai_api import DEFAULT_OPENAI_MODEL
 from feedback_common import StudentRow
 from feedback_master import generate_feedback
 
@@ -9,8 +8,6 @@ def comment_payload_for_student(
     student: StudentRow,
     *,
     class_review: str,
-    use_api: bool,
-    model: str = DEFAULT_OPENAI_MODEL,
     feedback_type: str = "comprehensive",
     message_column: str = "Feedback",
 ) -> str:
@@ -26,8 +23,6 @@ def comment_payload_for_student(
     feedback = generate_feedback(
         student,
         class_review=class_review,
-        use_api=use_api,
-        model=model,
         feedback_type=feedback_type,
     )
     if not feedback:

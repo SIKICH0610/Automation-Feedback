@@ -5,7 +5,6 @@ from pathlib import Path
 from xml.etree import ElementTree
 from zipfile import ZipFile
 
-from openai_api import DEFAULT_OPENAI_MODEL, create_response
 
 
 DEFAULT_OUTPUT = Path("class_review.txt")
@@ -41,60 +40,22 @@ def read_source_text(file_path: Path) -> str:
     if suffix == ".pptx":
         return extract_pptx_text(file_path)
     raise ValueError(
-        f"{suffix or 'this file type'} needs --use-api so GPT can read the file directly."
+        f"{suffix or 'this file type'} cannot be read directly. Convert it to .txt or .pptx, "
+        "or paste the recap into the Lesson recap box in the app."
     )
-
-
-def summarize_prompt(source_text: str, language: str) -> str:
-    return f"""
-You are helping a teacher write the class-material paragraph for a parent update.
-
-Write one natural paragraph in {language}.
-Mention the main topics, skills, and practice from today's class.
-Do not add a greeting, student name, bullet list, homework feedback, or personal comments.
-Output only the paragraph.
-
-Class material text:
-{source_text}
-""".strip()
-
-
-def summarize_file_prompt(language: str) -> str:
-    return f"""
-You are helping a teacher write the class-material paragraph for a parent update.
-
-Read the attached class material or slides.
-Write one natural paragraph in {language}.
-Mention the main topics, skills, and practice from today's class.
-Do not add a greeting, student name, bullet list, homework feedback, or personal comments.
-Output only the paragraph.
-""".strip()
 
 
 def build_class_review(
     *,
     source_text: str = "",
     source_file: Path | None = None,
-    language: str,
-    use_api: bool,
-    model: str,
 ) -> str:
-    if source_file and use_api:
-        return create_response(
-            summarize_file_prompt(language),
-            model=model,
-            file_path=source_file,
-        )
-
     if source_file:
         source_text = read_source_text(source_file)
 
     source_text = source_text.strip()
     if not source_text:
         raise ValueError("Provide --source-text or --source-file.")
-
-    if use_api:
-        return create_response(summarize_prompt(source_text, language), model=model)
     return source_text
 
 
@@ -105,9 +66,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-text", default="", help="Teacher-written class review.")
     parser.add_argument("--source-file", type=Path, help="Text, pptx, pdf, or slide file.")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--language", default="English")
-    parser.add_argument("--use-api", action="store_true")
-    parser.add_argument("--model", default=DEFAULT_OPENAI_MODEL)
     return parser
 
 
@@ -116,9 +74,6 @@ def main() -> None:
     review = build_class_review(
         source_text=args.source_text,
         source_file=args.source_file,
-        language=args.language,
-        use_api=args.use_api,
-        model=args.model,
     )
     args.output.write_text(review.strip() + "\n", encoding="utf-8")
     print(f"Wrote class review to {args.output}")

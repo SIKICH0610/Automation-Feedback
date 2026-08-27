@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from openai_api import DEFAULT_OPENAI_MODEL
 from feedback_common import (
     FEEDBACK_TYPE_CHOICES,
     OBSERVATION_FIELDS,
@@ -12,7 +11,6 @@ from feedback_common import (
     class_review_paragraph,
     clean_parent_feedback_text,
     homework_paragraph,
-    personal_feedback_with_gpt,
     phrase_for,
 )
 from feedback_general import general_comment_paragraph
@@ -38,8 +36,6 @@ def comprehensive_comment_paragraph(student: StudentRow, observations: list[str]
 @dataclass
 class FeedbackGenerator:
     class_review: str = ""
-    use_api: bool = False
-    model: str = DEFAULT_OPENAI_MODEL
 
     def is_chinese(self, student: StudentRow) -> bool:
         return student.language.lower().startswith("chinese")
@@ -118,21 +114,6 @@ class FeedbackGenerator:
         # comment would otherwise read the same instructions twice.
         wants_homework_note = feedback_type in {"general", "comprehensive"}
 
-        if self.use_api:
-            local_comment = "\n\n".join(personal_paragraphs)
-            personal_section = personal_feedback_with_gpt(
-                student,
-                observations=self.observations_for_student(student),
-                local_comment=local_comment,
-                homework=homework,
-                model=self.model,
-                feedback_type=feedback_type,
-            ).strip()
-            if wants_homework_note:
-                personal_section = append_homework_note(personal_section, is_chinese)
-            feedback = clean_parent_feedback_text("\n\n".join([class_paragraph, personal_section]))
-            return append_parent_closing(feedback, is_chinese)
-
         if wants_homework_note:
             if personal_paragraphs:
                 personal_paragraphs = [
@@ -152,12 +133,8 @@ def generate_feedback(
     student: StudentRow,
     class_review: str = "",
     *,
-    use_api: bool = False,
-    model: str = DEFAULT_OPENAI_MODEL,
     feedback_type: str = "comprehensive",
 ) -> str | None:
     return FeedbackGenerator(
         class_review=class_review,
-        use_api=use_api,
-        model=model,
     ).generate(student, feedback_type=feedback_type)

@@ -23,7 +23,6 @@ Generate one parent-facing feedback entry from the provided Excel tracker.
 - `class_review_builder.py`: create or overwrite `class_review.txt` from teacher text, notes, or slides.
 - `import_enrollment.py`: import a platform enrollment export into the SQLite roster, grouped into a named semester block.
 - `workbook_setup.py`: prepare optional workbook columns such as `Additional Comment`.
-- `openai_api.py`: shared OpenAI API helper.
 - `class_review.txt`: editable class-level paragraph used as paragraph 1.
 - `Geo_TTh_Student_Script_fixed_rows_only.xlsx`: one-time import source for the frontend and default workbook for direct CLI commands.
 
@@ -62,16 +61,6 @@ readlink -f .venv/bin/python
 ```
 
 and add that exact path (not `.venv/bin/python` itself, which is a symlink). After granting the permission, **fully quit and restart the frontend server** (`Ctrl+C` then re-run `./.venv/bin/python frontend_server.py`) — a process already running before the permission was granted keeps using its old, unpermitted state, and Accessibility prompts otherwise fail silently with `osascript is not allowed assistive access`.
-
-Optional API key for GPT-assisted workflows:
-
-```powershell
-$env:OPENAI_API_KEY="your_api_key_here"
-```
-
-```bash
-export OPENAI_API_KEY="your_api_key_here"
-```
 
 ## Local frontend
 
@@ -182,14 +171,6 @@ python class_review_builder.py --source-file ".\lesson_notes.txt" --output class
 python class_review_builder.py --source-file ".\lesson_slides.pptx" --output class_review.txt
 ```
 
-From slides or class material with the OpenAI API:
-
-```powershell
-$env:OPENAI_API_KEY="your_api_key_here"
-python class_review_builder.py --source-file ".\lesson_slides.pdf" --output class_review.txt --use-api
-python class_review_builder.py --source-file ".\lesson_slides.pptx" --output class_review.txt --use-api
-```
-
 The generated `class_review.txt` is copied directly as paragraph 1 of the parent message.
 
 ## Preview one entry
@@ -248,20 +229,6 @@ Test a smaller range before writing everyone:
 
 ```powershell
 python feedback_generator.py --sheet "Geo TTh" --all --start-row 2 --end-row 5 --class-review-file class_review.txt --write
-```
-
-## API-assisted student comments
-
-Revise the Chinese teacher note in `Remark for Student`, preview the parent comment, and leave the sheet unchanged:
-
-```powershell
-python feedback_generator.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --revise-remark --use-api
-```
-
-Revise the Chinese teacher note, save it back to `Remark for Student`, generate the parent comment, and write it to `Feedback`:
-
-```powershell
-python feedback_generator.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --revise-remark --write-revised-remark --use-api --write
 ```
 
 ## Supervised paste helper
@@ -362,14 +329,10 @@ This runs one class at a time under the hood and writes every class's results ba
 - `--all`: Generate feedback for every student row in the sheet.
 - `--start-row`: First row for `--all`. Defaults to `2`.
 - `--end-row`: Last row for `--all`. Omit to continue through the sheet.
-- `--review-csv`: Save generated preview rows to a UTF-8 CSV with row, UID, student, status, revised remark, and feedback columns.
+- `--review-csv`: Save generated preview rows to a UTF-8 CSV with row, UID, student, status, and feedback columns.
 - `--class-review`: What the class covered today. This becomes the first paragraph.
 - `--class-review-file`: Optional text file containing the class review.
 - `--feedback-type`: `comprehensive`, `general`, or `quiz`. Defaults to `comprehensive`.
-- `--use-api`: Use OpenAI to polish the student-specific parent comment.
-- `--revise-remark`: Use OpenAI to revise `Remark for Student` first.
-- `--write-revised-remark`: Save the revised remark back to the sheet.
-- `--model`: OpenAI model name. Defaults to `gpt-5.5`.
 - `--write`: Save the generated text back to the workbook.
 
 Absent students are skipped and no feedback comment is generated for them.
