@@ -59,6 +59,7 @@ class DesktopAppSpec:
     exe_names: tuple[str, ...]
     common_paths: tuple[str, ...]
     uri: str | None = None
+    mac_process_name: str | None = None
 
 
 @dataclass
@@ -128,6 +129,7 @@ def build_app_specs(
                 rf"{local_app_data}\Tencent\WXWork\WXWork.exe",
                 rf"{local_app_data}\WXWork\WXWork.exe",
             ),
+            mac_process_name="企业微信",
         ),
         "whatsapp": DesktopAppSpec(
             key="whatsapp",
@@ -141,6 +143,7 @@ def build_app_specs(
                 rf"{program_files}\WindowsApps\WhatsApp.exe",
             ),
             uri="https://web.whatsapp.com/",
+            mac_process_name="WhatsApp",
         ),
     }
 
@@ -150,6 +153,15 @@ def header_values(worksheet: Any) -> list[Any]:
 
 
 def automation_dependency_status() -> tuple[bool, str]:
+    if sys.platform == "darwin":
+        try:
+            import pyperclip  # noqa: F401
+        except Exception as exc:
+            return False, f"{type(exc).__name__}: {exc}"
+        if shutil.which("osascript") is None:
+            return False, "osascript was not found on this Mac."
+        return True, ""
+
     try:
         import pywinauto  # noqa: F401
         import pyperclip  # noqa: F401
@@ -158,7 +170,16 @@ def automation_dependency_status() -> tuple[bool, str]:
     return True, ""
 
 
-def process_is_running(process_names: tuple[str, ...]) -> bool:
+def process_is_running(process_names: tuple[str, ...], *, mac_process_name: str | None = None) -> bool:
+    if sys.platform == "darwin":
+        if not mac_process_name:
+            return False
+        try:
+            result = subprocess.run(["pgrep", "-x", mac_process_name], capture_output=True, text=True, timeout=5)
+        except Exception:
+            return False
+        return result.returncode == 0
+
     try:
         output = subprocess.check_output(
             ["tasklist"],
@@ -173,7 +194,31 @@ def process_is_running(process_names: tuple[str, ...]) -> bool:
     return any(process_name.lower() in output_lower for process_name in process_names)
 
 
-def app_window_found(title_re: str) -> bool:
+def app_window_found(title_re: str, *, mac_process_name: str | None = None) -> bool:
+    if sys.platform == "darwin":
+        if not mac_process_name or not process_is_running((), mac_process_name=mac_process_name):
+            return False
+        # The statements have to live inside run()'s body -- inlining them after a
+        # `return` is a JavaScript syntax error, which silently made this report "no
+        # window" for every app it was ever asked about.
+        script = (
+            "function run() {"
+            '  const se = Application("System Events");'
+            f"  const procs = se.processes.whose({{name: {json.dumps(mac_process_name)}}});"
+            "  return procs.length > 0 && procs[0].windows.length > 0;"
+            "}"
+        )
+        try:
+            result = subprocess.run(
+                ["osascript", "-l", "JavaScript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except Exception:
+            return False
+        return result.returncode == 0 and result.stdout.strip() == "true"
+
     return find_window_by_title_re(title_re) is not None
 
 
@@ -207,8 +252,10 @@ def find_window_by_title_re(title_re: str) -> Any | None:
 
 def app_status(spec: DesktopAppSpec) -> DesktopAppStatus:
     dependency_ok, dependency_error = automation_dependency_status()
-    running = process_is_running(spec.process_names)
-    window_found = app_window_found(spec.title_re) if dependency_ok else False
+    running = process_is_running(spec.process_names, mac_process_name=spec.mac_process_name)
+    window_found = (
+        app_window_found(spec.title_re, mac_process_name=spec.mac_process_name) if dependency_ok else False
+    )
 
     if not dependency_ok:
         message = "desktop automation dependencies are not available"
@@ -249,6 +296,16 @@ def launch_candidates(spec: DesktopAppSpec, configured_path: Path | None) -> lis
 
 
 def launch_app(spec: DesktopAppSpec, configured_path: Path | None = None) -> bool:
+    if sys.platform == "darwin":
+        if spec.mac_process_name:
+            result = subprocess.run(["open", "-a", spec.mac_process_name], capture_output=True, text=True)
+            if result.returncode == 0:
+                return True
+        if spec.uri:
+            result = subprocess.run(["open", spec.uri], capture_output=True, text=True)
+            return result.returncode == 0
+        return False
+
     for candidate in launch_candidates(spec, configured_path):
         candidate_path = Path(candidate).expanduser()
         if not candidate_path.exists():
@@ -1581,6 +1638,51 @@ def ensure_desktop_ready_once(
     _desktop_ready_cache.add(app_spec.key)
 
 
+def _run_wecom_job_mac(job: PasteJob, *, args: argparse.Namespace) -> JobResult:
+    from wecom_mac import WeComAutomationError, WeComPasteRobotMac
+
+    robot = WeComPasteRobotMac()
+    name_parts = [part for part in job.student_name.split() if part]
+
+    try:
+        robot.focus_window()
+    except WeComAutomationError as exc:
+        return JobResult(status="needs_review", error=str(exc))
+
+    try:
+        robot.search_and_open_top_result(job.search_key)
+    except LookupError as exc:
+        robot.clear_search_state()
+        return JobResult(status="not_found" if job.action == "check-group-chat" else "needs_review", error=str(exc))
+
+    verified, reason = robot.verify_chat(
+        uid=job.uid,
+        name_parts=name_parts,
+        expected_chat_name=job.expected_chat_name,
+    )
+    print(f"Verification: {reason}")
+
+    if job.action == "check-group-chat":
+        robot.clear_search_state()
+        status = "verified" if verified else "not_found"
+        print(f"Group chat check: {status}")
+        return JobResult(status=status)
+
+    if not verified:
+        if args.require_verification:
+            robot.clear_search_state()
+            raise LookupError("WeCom chat could not be verified.")
+        print("WARNING: Could not verify the chat automatically. Continuing because paste-only does not send.")
+
+    if job.feedback:
+        robot.paste_feedback(job.feedback)
+    if args.attachments:
+        print("Attachment paste is not yet supported on macOS; skipping attachments for this row.")
+    robot.clear_search_state()
+    print("Cleared WeCom search box for the next row.")
+    return JobResult(status="pasted", pasted=True)
+
+
 def run_wecom_job(
     job: PasteJob,
     *,
@@ -1588,6 +1690,9 @@ def run_wecom_job(
     app_spec: DesktopAppSpec,
     app_exe: Path | None,
 ) -> JobResult:
+    if sys.platform == "darwin":
+        return _run_wecom_job_mac(job, args=args)
+
     if job.action == "check-group-chat":
         ensure_desktop_ready_once(app_spec, app_exe=app_exe, no_auto_open=args.no_auto_open)
     else:
@@ -1661,6 +1766,15 @@ def run_whatsapp_job(
     app_spec: DesktopAppSpec,
     app_exe: Path | None,
 ) -> JobResult:
+    if sys.platform == "darwin":
+        # WeCom automation was ported to macOS first since most rows route there;
+        # WhatsApp's macOS port (search, verification) is still being worked out --
+        # see whatsapp_mac.py for the in-progress version.
+        return JobResult(
+            status="needs_review",
+            error="WhatsApp paste automation is not yet available on macOS. Send this row manually for now.",
+        )
+
     if job.action == "check-group-chat":
         if job.whatsapp_target_type == "phone":
             return JobResult(

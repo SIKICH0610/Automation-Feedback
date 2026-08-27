@@ -239,6 +239,76 @@ async function deleteAttachment(attachment) {
     setBusy(false);
   }
 }
+async function deleteStudent(row) {
+  const name =
+    `${displayValue(row.values["First Name"])} ${displayValue(row.values["Last Name"])}`.trim() ||
+    "this student";
+
+  if (!row.student_id) {
+    if (!window.confirm(`Remove ${name} from the roster? This row has not been saved yet.`)) return;
+    state.rows = state.rows.filter((item) => rowKey(item) !== rowKey(row));
+    state.selected.delete(rowKey(row));
+    markDirty("sheet");
+    renderTable();
+    return;
+  }
+
+  if (!window.confirm(`Delete ${name} from ${state.sheetName}? This cannot be undone.`)) return;
+
+  try {
+    setBusy(true, "Deleting student", name);
+    // Any unsaved edits to other rows must be saved first -- the delete goes straight
+    // to the database and reloading afterward would otherwise silently drop them.
+    if (state.dirty || state.announcementDirty) await saveAll({ quiet: true });
+    const payload = await api("/api/student/delete", {
+      method: "POST",
+      body: JSON.stringify({ sheet: state.sheetName, student_id: row.student_id }),
+    });
+    applySheetData(payload.data);
+    toast(`${name} deleted.`);
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function deleteClass() {
+  const sheetName = state.sheetName;
+  const studentCount = state.rows.length;
+  const confirmed = window.confirm(
+    `Delete "${sheetName}" and all ${studentCount} student${studentCount === 1 ? "" : "s"} in it, ` +
+      "including its announcement and attachments? This cannot be undone."
+  );
+  if (!confirmed) return;
+
+  try {
+    setBusy(true, "Deleting class", sheetName);
+    const payload = await api("/api/class/delete", {
+      method: "POST",
+      body: JSON.stringify({ sheet: sheetName }),
+    });
+    state.bootstrap.sheets = payload.sheets;
+    state.bootstrap.sheet_groups = payload.sheet_groups;
+    state.bootstrap.default_sheet = payload.default_sheet;
+    toast(`"${sheetName}" deleted.`);
+    if (payload.default_sheet) {
+      await loadSheet(payload.default_sheet);
+    } else {
+      state.sheetName = "";
+      state.rows = [];
+      state.columns = [];
+      state.selected.clear();
+      renderTabs();
+      renderTable();
+    }
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
 function sheetGroups() {
   return state.bootstrap.sheet_groups || [{ semester: "", sheets: state.bootstrap.sheets || [] }];
 }
@@ -750,6 +820,10 @@ function renderTable() {
     th.style.minWidth = `${column.width}px`;
     headerRow.appendChild(th);
   });
+
+  const actionsHeader = document.createElement("th");
+  actionsHeader.className = "row-actions";
+  headerRow.appendChild(actionsHeader);
   elements.studentHead.replaceChildren(headerRow);
 
   const fragment = document.createDocumentFragment();
@@ -775,6 +849,20 @@ function renderTable() {
       td.appendChild(createEditor(row, column));
       tr.appendChild(td);
     });
+
+    const actionsCell = document.createElement("td");
+    actionsCell.className = "row-actions";
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "icon-button remove-student-row";
+    deleteButton.textContent = "×";
+    const studentLabel = displayValue(row.values["First Name"]) || "this student";
+    deleteButton.title = `Delete ${studentLabel}`;
+    deleteButton.setAttribute("aria-label", `Delete ${studentLabel}`);
+    deleteButton.addEventListener("click", () => deleteStudent(row));
+    actionsCell.appendChild(deleteButton);
+    tr.appendChild(actionsCell);
+
     fragment.appendChild(tr);
   });
   elements.studentBody.replaceChildren(fragment);
@@ -1043,6 +1131,7 @@ function bindEvents() {
     renderTable();
   });
   elements.addRow.addEventListener("click", addStudent);
+  elements.deleteClass.addEventListener("click", deleteClass);
   elements.saveSheet.addEventListener("click", async () => {
     try {
       setBusy(true, "Saving database", state.sheetName);
@@ -1132,6 +1221,7 @@ async function initialize() {
     "saveSheet",
     "exportExcel",
     "exportReport",
+    "deleteClass",
     "selectionCount",
     "rowCount",
     "selectVisible",

@@ -552,7 +552,7 @@ class FrontendHandler(BaseHTTPRequestHandler):
                         "default_sheet": sheets[0] if sheets else "",
                         "quiz_banks": self.store.list_quiz_banks(),
                         "platform": sys.platform,
-                        "paste_supported": os.name == "nt",
+                        "paste_supported": os.name == "nt" or sys.platform == "darwin",
                     },
                 )
                 return
@@ -750,6 +750,17 @@ class FrontendHandler(BaseHTTPRequestHandler):
                         "attachments": self.store.list_attachments(sheet_name),
                     },
                 )
+                return
+            if parsed.path == "/api/student/delete":
+                data = self.store.delete_student(
+                    str(payload.get("sheet") or ""),
+                    str(payload.get("student_id") or ""),
+                )
+                self._send_json(200, {"ok": True, "data": data})
+                return
+            if parsed.path == "/api/class/delete":
+                result = self.store.delete_class(str(payload.get("sheet") or ""))
+                self._send_json(200, {"ok": True, **result})
                 return
             if parsed.path == "/api/action":
                 result = self.runner.run(payload)

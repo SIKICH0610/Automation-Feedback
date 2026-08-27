@@ -1094,6 +1094,45 @@ class SQLiteFeedbackStore:
 
         return self.load_sheet(sheet_name)
 
+    def delete_student(self, sheet_name: str, student_id: str) -> dict[str, Any]:
+        student_id = str(student_id or "").strip()
+        if not student_id:
+            raise StoreError("A student record was not specified.")
+
+        with self.lock, self._connect() as connection:
+            class_row = self._class_row(connection, sheet_name)
+            cursor = connection.execute(
+                "DELETE FROM students WHERE id = ? AND class_id = ?",
+                (student_id, int(class_row["id"])),
+            )
+            if cursor.rowcount == 0:
+                raise StoreError(f"Student record {student_id!r} was not found.")
+
+        return self.load_sheet(sheet_name)
+
+    def delete_class(self, sheet_name: str) -> dict[str, Any]:
+        # Resolved before the class row is deleted -- announcement_path() raises if the
+        # sheet doesn't exist, and it isn't a DB row, so nothing else would clean it up.
+        stale_announcement_path = self.announcement_path(sheet_name)
+
+        with self.lock, self._connect() as connection:
+            class_row = self._class_row(connection, sheet_name)
+            connection.execute("DELETE FROM classes WHERE id = ?", (int(class_row["id"]),))
+            # Deleting the class row cascades to its columns, students, and attachments
+            # (all declared ON DELETE CASCADE), but the template workbook is a plain file
+            # rebuilt only on template-missing or new-class-import, so it needs an
+            # explicit refresh here or it would keep a stale sheet for the deleted class.
+            self._create_template_from_database(connection)
+
+        stale_announcement_path.unlink(missing_ok=True)
+
+        sheets = self.sheet_names()
+        return {
+            "sheets": sheets,
+            "sheet_groups": self.sheet_groups(),
+            "default_sheet": sheets[0] if sheets else "",
+        }
+
     @staticmethod
     def _copy_row_format(worksheet: Any, source_row: int, target_row: int) -> None:
         if source_row < 2:
