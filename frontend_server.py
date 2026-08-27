@@ -325,6 +325,22 @@ class FrontendHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(content)
+
+    def _send_download(self, file_path: Path) -> None:
+        content = file_path.read_bytes()
+        self.send_response(200)
+        self.send_header(
+            "Content-Type",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        self.send_header("Content-Length", str(len(content)))
+        # _export_filename() already reduces the name to ASCII word characters, so it
+        # needs no RFC 5987 escaping even when the semester name is non-Latin.
+        self.send_header("Content-Disposition", f'attachment; filename="{file_path.name}"')
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(content)
+
     def _serve_static(self, request_path: str) -> None:
         relative = "index.html" if request_path in {"", "/"} else unquote(request_path.lstrip("/"))
         target = (STATIC_DIR / relative).resolve()
@@ -401,6 +417,21 @@ class FrontendHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/attachment":
                 attachment_id = parse_qs(parsed.query).get("id", [""])[0]
                 self._send_attachment(self.store.get_attachment(attachment_id))
+                return
+            if parsed.path == "/api/export/download":
+                query = parse_qs(parsed.query)
+                export_type = (query.get("type", ["full"])[0] or "full").strip()
+                # An absent semester param means "everything"; the frontend always sends
+                # one so a download matches the semester block currently on screen.
+                raw_semester = query.get("semester", [None])[0]
+                semester_name = raw_semester.strip() if raw_semester else None
+                if export_type == "report":
+                    export_path = self.store.export_summary_report(semester_name)
+                elif export_type == "full":
+                    export_path = self.store.export_public_workbook(semester_name)
+                else:
+                    raise FrontendError(f"Unknown export type {export_type!r}.")
+                self._send_download(export_path)
                 return
             self._serve_static(parsed.path)
         except (AttachmentStoreError, FrontendError, QuizBankStoreError) as exc:
@@ -552,25 +583,24 @@ class FrontendHandler(BaseHTTPRequestHandler):
                 result = self.runner.run(payload)
                 self._send_json(200 if result["ok"] else 422, result)
                 return
-            if parsed.path == "/api/export":
-                export_path = self.store.export_public_workbook()
+            if parsed.path in {"/api/export", "/api/export/report"}:
+                # Writes the file into exports/ and reports its path, without streaming a
+                # download. The frontend buttons use GET /api/export/download instead; this
+                # stays for scripted/API use.
+                raw_semester = payload.get("semester")
+                semester_name = str(raw_semester).strip() if raw_semester else None
+                if parsed.path == "/api/export":
+                    export_path = self.store.export_public_workbook(semester_name)
+                    label = "Excel export"
+                else:
+                    export_path = self.store.export_summary_report(semester_name)
+                    label = "Report export"
                 self._send_json(
                     200,
                     {
                         "ok": True,
                         "path": str(export_path),
-                        "message": "Excel export created. Editing it will not change the database.",
-                    },
-                )
-                return
-            if parsed.path == "/api/export/report":
-                export_path = self.store.export_summary_report()
-                self._send_json(
-                    200,
-                    {
-                        "ok": True,
-                        "path": str(export_path),
-                        "message": "Report export created. Editing it will not change the database.",
+                        "message": f"{label} created. Editing it will not change the database.",
                     },
                 )
                 return

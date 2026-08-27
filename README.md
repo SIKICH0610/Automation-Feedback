@@ -128,9 +128,16 @@ A student currently on that class's roster but missing from the file is **perman
 
 The semester dropdown (top-left of the class tabs, once you have more than one semester) has a **Delete "<semester name>"** button next to it. It shows exactly which classes and how many students would be permanently removed before you confirm, makes the same automatic backup, and keeps you on the roster view afterward — falling back to the first remaining class rather than reloading the page.
 
-## Export a curated status report
+## Export a semester's roster
 
-**Export Report**, next to **Export Excel** in the roster toolbar, writes `exports/Student_Report_Export.xlsx` — one sheet per class with just Name, Student ID, 电话号码 (`WhatsApp Phone`, blank unless set), 是否有群 (`Group Chat`), 是否发开课提醒 (`Before Class Informing`), 是否发课后反馈 (whether `Send Status` is `pasted`), 第一节课反馈 (`Feedback`), 第一次quiz反馈 (`Quiz1 Feedback`), and 第二次quiz反馈 (`Quiz2 Feedback`). This is a read-only snapshot for reporting; unlike **Export Excel**, it isn't meant to be re-imported. Editing it does not change the database.
+Both export buttons in the roster toolbar download a real `.xlsx` file through the browser, scoped to **the semester currently selected in the top-left dropdown**, with one class per sheet:
+
+- **Export Excel** → `Student_Feedback_Export_<Semester>.xlsx`: every internal column, formatted from the workbook template. This is the full round-trip copy.
+- **Export Report** → `Student_Report_Export_<Semester>.xlsx`: the curated status view with just Name, Student ID, 电话号码 (`WhatsApp Phone`, blank unless set), 是否有群 (`Group Chat`), 是否发开课提醒 (`Before Class Informing`), 是否发课后反馈 (whether `Send Status` is `pasted`), 第一节课反馈 (`Feedback`), 第一次quiz反馈 (`Quiz1 Feedback`), and 第二次quiz反馈 (`Quiz2 Feedback`). Meant for reporting, not for re-importing.
+
+Editing either downloaded file does not change the database. The pre-semester classes shown as "Other Classes" export the same way, as `..._Other_Classes.xlsx`.
+
+Scripted callers can still use `POST /api/export` or `POST /api/export/report` with an optional `{"semester": "Fall 2026"}` body, which writes the file into `exports/` and returns its path instead of streaming a download. Omitting `semester` there exports every class across all semesters.
 
 ## Create the class review file
 

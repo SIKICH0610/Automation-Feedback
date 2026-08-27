@@ -107,6 +107,13 @@ REPORT_COLUMNS = (
     "第一次quiz反馈",
     "第二次quiz反馈",
 )
+# The three feedback columns hold whole paragraphs, so they get much wider cells.
+REPORT_COLUMN_WIDTHS = (18, 13, 16, 11, 16, 16, 60, 60, 60)
+
+# Sentinel meaning "the classes that predate semesters and have no semester_id" --
+# the block the frontend labels "Other Classes". Distinct from None, which means
+# every class regardless of semester.
+UNASSIGNED_SEMESTER = "__unassigned__"
 
 
 def _report_yes_no(value: Any) -> str:
@@ -1193,29 +1200,97 @@ class SQLiteFeedbackStore:
         except OSError:
             pass
 
-    def export_public_workbook(self) -> Path:
+    def _scoped_class_rows(
+        self,
+        connection: sqlite3.Connection,
+        semester_name: str | None,
+    ) -> list[sqlite3.Row]:
+        """Class rows for one semester block, in tab order.
+
+        semester_name of None means every class (the whole database). The
+        UNASSIGNED_SEMESTER sentinel means the legacy classes that predate semesters
+        and therefore have no semester_id -- the group the frontend labels
+        "Other Classes".
+        """
+        if semester_name is None:
+            return connection.execute(
+                "SELECT id, name FROM classes ORDER BY position"
+            ).fetchall()
+
+        if semester_name == UNASSIGNED_SEMESTER:
+            return connection.execute(
+                "SELECT id, name FROM classes WHERE semester_id IS NULL ORDER BY position"
+            ).fetchall()
+
+        semester_row = connection.execute(
+            "SELECT id FROM semesters WHERE name = ?", (semester_name,)
+        ).fetchone()
+        if semester_row is None:
+            raise StoreError(f"Semester {semester_name!r} was not found.")
+        return connection.execute(
+            "SELECT id, name FROM classes WHERE semester_id = ? ORDER BY position",
+            (int(semester_row["id"]),),
+        ).fetchall()
+
+    @staticmethod
+    def _export_filename(prefix: str, semester_name: str | None) -> str:
+        if semester_name is None:
+            return f"{prefix}_All_Classes.xlsx"
+        label = "Other_Classes" if semester_name == UNASSIGNED_SEMESTER else semester_name
+        safe_label = re.sub(r"[^A-Za-z0-9._-]+", "_", label).strip("._") or "Export"
+        return f"{prefix}_{safe_label}.xlsx"
+
+    def export_public_workbook(self, semester_name: str | None = None) -> Path:
+        """Full round-trip copy of every internal column, one sheet per class.
+
+        Scoped to a single semester block when semester_name is given, so the file
+        holds exactly that semester's roster rather than every class ever imported.
+        Built from the formatted template, then the out-of-scope sheets are dropped,
+        which keeps each remaining sheet's column widths and header styling intact.
+        """
         with self.lock:
-            output_path = self.export_dir / "Student_Feedback_Export.xlsx"
+            with self._connect() as connection:
+                scoped_names = [str(row["name"]) for row in self._scoped_class_rows(connection, semester_name)]
+            if not scoped_names:
+                raise StoreError("That semester has no classes to export.")
+
+            output_path = self.export_dir / self._export_filename("Student_Feedback_Export", semester_name)
             self._write_database_to_workbook(output_path)
+
+            if semester_name is not None:
+                workbook = load_workbook(output_path)
+                try:
+                    for sheet_name in list(workbook.sheetnames):
+                        if sheet_name not in scoped_names:
+                            del workbook[sheet_name]
+                    temporary = output_path.with_suffix(".tmp.xlsx")
+                    workbook.save(temporary)
+                    temporary.replace(output_path)
+                finally:
+                    workbook.close()
             return output_path
 
-    def export_summary_report(self) -> Path:
+    def export_summary_report(self, semester_name: str | None = None) -> Path:
         """A curated, parent-status-style report: one sheet per class, with only the
         columns staff actually review day to day, in plain-language Chinese headers.
         Distinct from export_public_workbook, which is a full raw round-trip copy of
-        every internal column across every class.
+        every internal column. Scoped to one semester block when semester_name is given.
         """
         workbook = Workbook()
         try:
             with self.lock, self._connect() as connection:
-                class_rows = connection.execute(
-                    "SELECT id, name FROM classes ORDER BY position"
-                ).fetchall()
+                class_rows = self._scoped_class_rows(connection, semester_name)
+                if not class_rows:
+                    raise StoreError("That semester has no classes to export.")
                 for index, class_row in enumerate(class_rows):
                     worksheet = workbook.active if index == 0 else workbook.create_sheet()
                     worksheet.title = str(class_row["name"])
                     for column_index, header in enumerate(REPORT_COLUMNS, start=1):
                         worksheet.cell(1, column_index).value = header
+                        worksheet.column_dimensions[get_column_letter(column_index)].width = (
+                            REPORT_COLUMN_WIDTHS[column_index - 1]
+                        )
+                    worksheet.freeze_panes = "A2"
 
                     students = self._students(connection, int(class_row["id"]))
                     for row_index, student in enumerate(students, start=2):
@@ -1223,7 +1298,7 @@ class SQLiteFeedbackStore:
                         for column_index, value in enumerate(_report_row(values), start=1):
                             worksheet.cell(row_index, column_index).value = value
 
-            output_path = self.export_dir / "Student_Report_Export.xlsx"
+            output_path = self.export_dir / self._export_filename("Student_Report_Export", semester_name)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             temporary = output_path.with_suffix(".tmp.xlsx")
             workbook.save(temporary)

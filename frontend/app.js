@@ -278,6 +278,60 @@ async function switchSemester(groupIndex) {
   await switchSheet(group.sheets[0]);
 }
 
+function currentSemesterParam() {
+  const groups = sheetGroups();
+  const group = groups[activeGroupIndex(groups)];
+  if (!group) return null;
+  // Matches UNASSIGNED_SEMESTER in database_store.py: the legacy classes that have
+  // no semester_id, shown as "Other Classes".
+  return group.is_semester ? group.semester : "__unassigned__";
+}
+
+async function downloadExport(type, label) {
+  if (state.busy) return;
+  const semester = currentSemesterParam();
+  try {
+    setBusy(true, `Preparing ${label.toLowerCase()}`, semester ? `Semester: ${semester}` : "");
+    await saveAll({ quiet: true });
+
+    const query = new URLSearchParams({ type });
+    if (semester) query.set("semester", semester);
+    const response = await fetch(`/api/export/download?${query}`);
+    if (!response.ok) {
+      let message = `The server returned HTTP ${response.status}.`;
+      try {
+        const payload = await response.json();
+        message = payload.error || message;
+      } catch {
+        /* A non-JSON error body leaves the generic status message in place. */
+      }
+      throw new Error(message);
+    }
+
+    const blob = await response.blob();
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const match = disposition.match(/filename="([^"]+)"/);
+    const filename = match ? match[1] : `${type}_export.xlsx`;
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+
+    setLog(`${label} downloaded as ${filename}.`);
+    toast(`${label} downloaded.`);
+  } catch (error) {
+    setLog(error.message);
+    toast(error.message, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
 async function deleteCurrentSemester() {
   if (state.busy) return;
   const groups = sheetGroups();
@@ -860,40 +914,8 @@ function bindEvents() {
       setBusy(false);
     }
   });
-  elements.exportExcel.addEventListener("click", async () => {
-    try {
-      setBusy(true, "Exporting Excel", "Creating a separate workbook copy.");
-      await saveAll({ quiet: true });
-      const result = await api("/api/export", {
-        method: "POST",
-        body: JSON.stringify({}),
-      });
-      setLog(`${result.message}\n${result.path}`);
-      toast("Excel export created.");
-    } catch (error) {
-      setLog(error.message);
-      toast(error.message, true);
-    } finally {
-      setBusy(false);
-    }
-  });
-  elements.exportReport.addEventListener("click", async () => {
-    try {
-      setBusy(true, "Exporting report", "Creating the curated status report.");
-      await saveAll({ quiet: true });
-      const result = await api("/api/export/report", {
-        method: "POST",
-        body: JSON.stringify({}),
-      });
-      setLog(`${result.message}\n${result.path}`);
-      toast("Report export created.");
-    } catch (error) {
-      setLog(error.message);
-      toast(error.message, true);
-    } finally {
-      setBusy(false);
-    }
-  });
+  elements.exportExcel.addEventListener("click", () => downloadExport("full", "Excel export"));
+  elements.exportReport.addEventListener("click", () => downloadExport("report", "Report export"));
   elements.deleteSemester.addEventListener("click", deleteCurrentSemester);
   elements.saveAnnouncement.addEventListener("click", async () => {
     try {
