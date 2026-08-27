@@ -1,4 +1,4 @@
-﻿__pycache__/
+__pycache__/
 *.py[cod]
 .env
 .venv/
@@ -10,3 +10,5 @@ app_data/
 exports/
 announcements/
 
+# Excel writes these lock files next to an open workbook
+~$*
