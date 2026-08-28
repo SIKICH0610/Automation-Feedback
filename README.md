@@ -203,14 +203,16 @@ body, which writes into `exports/` and returns the path instead of streaming a d
 ## Building the macOS app
 
 ```bash
-./.venv/bin/python -m PyInstaller TeacherFeedbackDesk.spec --noconfirm
+./build_mac.sh
 ```
 
-That produces `dist/Teacher Feedback Desk.app` (ad-hoc signed). Wrap it in a DMG:
-
-```bash
-STAGE=$(mktemp -d) && cp -R "dist/Teacher Feedback Desk.app" "$STAGE/" && ln -s /Applications "$STAGE/Applications" && hdiutil create -volname "Teacher Feedback Desk" -srcfolder "$STAGE" -ov -format UDZO "dist/Teacher Feedback Desk.dmg" && rm -rf "$STAGE"
-```
+That builds `dist/Teacher Feedback Desk.app`, signs every nested binary with the
+"Think Academy Automation" certificate from the login keychain, and wraps it in
+`dist/Teacher Feedback Desk.dmg`. Signing every release with that same certificate is
+what lets macOS keep the Accessibility grant across updates — teachers replace the app
+and their permissions carry over. (The deep re-sign step matters: a cert-signed
+launcher refuses to load the bundled Python.framework while it still carries
+python.org's signature, and the app dies instantly at startup.)
 
 The packaged app keeps its data in `~/Library/Application Support/Teacher Feedback
 Desk/` — database, announcements, exports, and an `app.log` with startup lines and
