@@ -85,10 +85,12 @@ cancelled" at the top of every student's individual feedback.
 
 ### Generate comments
 
-Select students, then **Generate comments**. Each one gets the lesson recap, a paragraph
-built from that student's dropdown observations and the teacher's `Remark for Student`
-note, the standing homework/app/coin note, and the closing line. Results are written into
-the `Feedback` column, where you can edit them before pasting.
+Select students, then **Generate comments**. Every message is exactly three paragraphs:
+the greeting with the lesson recap; the student's classroom performance, built from the
+dropdown observations and the teacher's `Remark for Student` note; and a final paragraph
+with the standing homework/app/coin note, any `Homework Reflection`, and the closing
+line. Results land in the `Feedback` column, where you can edit them before pasting —
+click a long cell and it floats open as a full-size box in place.
 
 Absent students are skipped. Fields marked `Not Observed` are left out.
 `Additional Comment` is appended to the end of the personal paragraph.

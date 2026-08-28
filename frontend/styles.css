@@ -645,7 +645,10 @@ textarea.cell-input.is-expanded {
   position: absolute;
   z-index: 40;
   top: 2px;
-  left: 2px;
+  /* Anchored to the cell's right edge so the box grows leftward, into the part of
+     the table that is already on screen -- no extra horizontal scrolling. */
+  right: 2px;
+  left: auto;
   width: 460px;
   max-width: 70vw;
   height: 260px;

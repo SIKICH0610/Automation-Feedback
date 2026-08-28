@@ -6,8 +6,8 @@ from feedback_common import (
     FEEDBACK_TYPE_CHOICES,
     OBSERVATION_FIELDS,
     StudentRow,
-    append_homework_note,
-    append_parent_closing,
+    closing_sentence,
+    homework_note,
     class_review_paragraph,
     clean_parent_feedback_text,
     homework_paragraph,
@@ -114,28 +114,23 @@ class FeedbackGenerator:
         homework = homework_paragraph(student, is_chinese)
         personal_paragraphs = self.personal_paragraphs(student, feedback_type)
 
-        # The standing homework note belongs on the class-performance comment. A
+        # The standing homework note goes with the class-performance comment only. A
         # quiz-only message is about that quiz, and a parent who also gets the general
         # comment would otherwise read the same instructions twice.
         wants_homework_note = feedback_type in {"general", "comprehensive"}
 
-        if wants_homework_note:
-            if personal_paragraphs:
-                personal_paragraphs = [
-                    *personal_paragraphs[:-1],
-                    append_homework_note(personal_paragraphs[-1], is_chinese),
-                ]
-            else:
-                personal_paragraphs = [append_homework_note("", is_chinese)]
-
-        # Always exactly three paragraphs -- greeting, one middle block, closing --
-        # so a homework reflection or a comprehensive run's quiz+general pair can
-        # never stretch the message to four.
-        middle_parts = [part.strip() for part in [*personal_paragraphs, homework or ""] if part and part.strip()]
+        # Always exactly three paragraphs: greeting / the student's classroom
+        # performance, nothing else / homework note + homework reflection + closing.
         joiner = "" if is_chinese else " "
-        middle = joiner.join(middle_parts)
-        feedback = clean_parent_feedback_text("\n\n".join([class_paragraph, middle] if middle else [class_paragraph]))
-        return append_parent_closing(feedback, is_chinese)
+        middle = joiner.join(part.strip() for part in personal_paragraphs if part and part.strip())
+        tail_parts = [
+            homework_note(is_chinese) if wants_homework_note else "",
+            homework or "",
+            closing_sentence(is_chinese),
+        ]
+        tail = joiner.join(part.strip() for part in tail_parts if part and part.strip())
+        paragraphs = [class_paragraph, middle, tail] if middle else [class_paragraph, tail]
+        return clean_parent_feedback_text("\n\n".join(paragraphs))
 
 def generate_feedback(
     student: StudentRow,
