@@ -785,14 +785,23 @@ function createEditor(row, column) {
       editor.appendChild(option);
     });
     editor.value = current;
+  } else if (column.kind === "long_text") {
+    // Must be a textarea: an <input type=text> strips newlines on assignment, which
+    // both displayed multi-paragraph feedback as one line and permanently destroyed
+    // the paragraph breaks on the next save.
+    editor = document.createElement("textarea");
+    editor.rows = 1;
+    editor.value = current;
+    editor.classList.add("is-long");
+    editor.title = current;
+    // Class-driven rather than :focus-driven so the floating box also works when
+    // the window itself is not the OS-focused window (e.g. a background webview).
+    editor.addEventListener("focus", () => editor.classList.add("is-expanded"));
+    editor.addEventListener("blur", () => editor.classList.remove("is-expanded"));
   } else {
     editor = document.createElement("input");
     editor.type = "text";
     editor.value = current;
-    if (column.kind === "long_text") {
-      editor.classList.add("is-long");
-      editor.title = current;
-    }
   }
 
   editor.classList.add("cell-input");
