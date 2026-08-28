@@ -160,6 +160,25 @@ def process_is_running(process_names: tuple[str, ...], *, mac_process_name: str 
     return any(process_name.lower() in output_lower for process_name in process_names)
 
 
+def _frozen_app_location_note() -> str:
+    """Which .app this process actually is, for permission messages.
+
+    Grants are per-copy: a teacher who runs the app straight out of the mounted
+    DMG grants one copy in Settings while running another, and "still no
+    permission" is unexplainable without showing the running path.
+    """
+    if not getattr(sys, "frozen", False):
+        return ""
+    exe = Path(sys.executable).resolve()
+    app_path = next((str(parent) for parent in exe.parents if parent.suffix == ".app"), str(exe))
+    if app_path.startswith("/Volumes/"):
+        return (
+            f"注意：现在运行的这份 App 在安装盘（DMG）里（{app_path}）。"
+            "请先把它拖进「应用程序」文件夹，推出安装盘，再从「应用程序」里打开并授权。"
+        )
+    return f"（当前运行的 App：{app_path}。在系统设置里授权时，请确认选的就是这一份。）"
+
+
 def mac_permission_hint(error_text: str) -> str:
     """Map a macOS TCC refusal to the exact setting the user must flip.
 
@@ -169,19 +188,25 @@ def mac_permission_hint(error_text: str) -> str:
     the dev Python do not carry over.
     """
     text = error_text or ""
+    hint = ""
     if "-1743" in text or "Not authorized to send Apple events" in text:
-        return (
+        hint = (
             "这台电脑还没有允许本 App 控制 System Events（自动化权限）。"
             "请打开 系统设置 → 隐私与安全性 → 自动化，找到本 App，勾选 System Events，"
             "然后完全退出并重新打开本 App。"
+            "如果列表里没有本 App，先点一次任意粘贴/检查按钮，屏幕会弹出询问框，点「允许」。"
         )
-    if "-25211" in text or "assistive access" in text:
-        return (
+    elif "-25211" in text or "assistive access" in text:
+        hint = (
             "这台电脑还没有给本 App 辅助功能权限。"
             "请打开 系统设置 → 隐私与安全性 → 辅助功能，把本 App 加入并打开开关，"
             "然后完全退出并重新打开本 App。"
         )
-    return ""
+    if hint:
+        note = _frozen_app_location_note()
+        if note:
+            hint += note
+    return hint
 
 
 def _mac_window_probe(mac_process_name: str) -> tuple[bool, str]:
@@ -202,6 +227,13 @@ def _mac_window_probe(mac_process_name: str) -> tuple[bool, str]:
             capture_output=True,
             text=True,
             timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        # The first automation call on a fresh machine blocks on the consent
+        # dialog; timing out here almost always means it is sitting unanswered.
+        return False, (
+            "等待系统权限确认超时——屏幕上可能正弹着「想要控制 System Events」的询问框，"
+            "请点「允许」后重试。" + _frozen_app_location_note()
         )
     except Exception as exc:
         return False, mac_permission_hint(str(exc))
