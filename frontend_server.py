@@ -47,6 +47,41 @@ DEFAULT_EXPORT_DIR = PROJECT_DIR / "exports"
 FrontendError = StoreError
 WorkbookStore = SQLiteFeedbackStore
 
+# The CLI tools the server runs as child processes, by module name. Kept explicit
+# rather than importing arbitrary names, since --worker is reachable from the command
+# line of a packaged app.
+WORKER_MODULES = ("paste_sender", "feedback_generator")
+
+
+def worker_command(worker: str) -> list[str]:
+    """Command line that starts one of our own CLI tools as a child process.
+
+    Run from source, that is simply `python <worker>.py`. In a frozen build
+    (PyInstaller) there is no interpreter and no .py files on disk --
+    sys.executable is the packaged app itself, so the app relaunches itself with
+    --worker and main() dispatches to the tool instead of starting the server.
+    """
+    if worker not in WORKER_MODULES:
+        raise ValueError(f"Unknown worker {worker!r}")
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--worker", worker]
+    return [sys.executable, str(PROJECT_DIR / f"{worker}.py")]
+
+
+def run_worker(argv: list[str]) -> None:
+    """Entry path for a frozen app relaunched as one of its own CLI tools."""
+    if not argv or argv[0] not in WORKER_MODULES:
+        raise SystemExit(f"--worker needs one of: {', '.join(WORKER_MODULES)}")
+    worker, rest = argv[0], argv[1:]
+    # The tool's own argparse must see only its own arguments.
+    sys.argv = [worker, *rest]
+    if worker == "paste_sender":
+        from paste_sender import main as worker_main
+    else:
+        from feedback_generator import main as worker_main
+    worker_main()
+
+
 class ActionRunner:
     def __init__(self, store: WorkbookStore) -> None:
         self.store = store
@@ -114,8 +149,7 @@ class ActionRunner:
 
         if action == "generate-comments":
             return [
-                sys.executable,
-                str(PROJECT_DIR / "feedback_generator.py"),
+                *worker_command("feedback_generator"),
                 *common,
                 "--write",
                 "--feedback-type",
@@ -127,8 +161,7 @@ class ActionRunner:
 
         if action == "paste-announcement":
             return [
-                sys.executable,
-                str(PROJECT_DIR / "paste_sender.py"),
+                *worker_command("paste_sender"),
                 *common,
                 "--action",
                 "mass-notification",
@@ -142,8 +175,7 @@ class ActionRunner:
 
         if action == "paste-comments":
             return [
-                sys.executable,
-                str(PROJECT_DIR / "paste_sender.py"),
+                *worker_command("paste_sender"),
                 *common,
                 "--action",
                 "comment",
@@ -156,8 +188,7 @@ class ActionRunner:
 
         if action == "check-group-chat":
             return [
-                sys.executable,
-                str(PROJECT_DIR / "paste_sender.py"),
+                *worker_command("paste_sender"),
                 *common,
                 "--action",
                 "check-group-chat",
@@ -186,8 +217,7 @@ class ActionRunner:
 
             if action == "generate-quiz-feedback":
                 return [
-                    sys.executable,
-                    str(PROJECT_DIR / "feedback_generator.py"),
+                    *worker_command("feedback_generator"),
                     *common,
                     "--write",
                     "--feedback-type",
@@ -213,8 +243,7 @@ class ActionRunner:
                 ], f"Generated quiz {quiz_number} feedback"
 
             return [
-                sys.executable,
-                str(PROJECT_DIR / "paste_sender.py"),
+                *worker_command("paste_sender"),
                 *common,
                 "--action",
                 "comment",
@@ -276,7 +305,7 @@ class ActionRunner:
         # probe was observed to hang instead of returning.
         try:
             probe = subprocess.run(
-                [sys.executable, str(PROJECT_DIR / "paste_sender.py"), "--check-apps"],
+                [*worker_command("paste_sender"), "--check-apps"],
                 cwd=PROJECT_DIR,
                 capture_output=True,
                 text=True,
@@ -333,8 +362,7 @@ class ActionRunner:
                         continue
 
                     command = [
-                        sys.executable,
-                        str(PROJECT_DIR / "paste_sender.py"),
+                        *worker_command("paste_sender"),
                         "--workbook",
                         str(self.store.workbook_path),
                         "--sheet",
@@ -843,6 +871,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    # A frozen build relaunching itself as one of its CLI tools comes through here
+    # first; everything after this line is the normal server start.
+    if len(sys.argv) > 1 and sys.argv[1] == "--worker":
+        run_worker(sys.argv[2:])
+        return
+
     args = build_parser().parse_args()
     store = WorkbookStore(
         database_path=args.database,
