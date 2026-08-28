@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -8,7 +9,14 @@ from openpyxl import load_workbook
 
 
 PROJECT_DIR = Path(__file__).resolve().parent
-DEFAULT_WORKBOOK = PROJECT_DIR / "Geo_TTh_Student_Script_fixed_rows_only.xlsx"
+# A packaged build seeds a fresh install from the blank template: the real roster
+# workbook must never ship inside an installer handed to other people.
+_SEED_WORKBOOK = (
+    "roster_template.xlsx"
+    if getattr(sys, "frozen", False)
+    else "Geo_TTh_Student_Script_fixed_rows_only.xlsx"
+)
+DEFAULT_WORKBOOK = PROJECT_DIR / _SEED_WORKBOOK
 DEFAULT_SHEET = "Geo TTh"
 ADDITIONAL_COMMENT_COLUMN = "Additional Comment"
 SECOND_QUIZ_COLUMNS = ("Quiz2 Score", "Second Quiz Score")

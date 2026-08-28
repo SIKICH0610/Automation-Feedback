@@ -12,8 +12,10 @@ a = Analysis(
     binaries=[],
     datas=[
         ("frontend", "frontend"),
-        # Seed workbook: imported once when a fresh install creates its database.
-        ("Geo_TTh_Student_Script_fixed_rows_only.xlsx", "."),
+        # Blank seed template: imported once when a fresh install creates its
+        # database. Deliberately NOT the real roster workbook -- installers get
+        # handed to colleagues, and student names/uids must not ride along.
+        ("roster_template.xlsx", "."),
     ],
     hiddenimports=[
         # Lazy imports the runners reach for at job time.
