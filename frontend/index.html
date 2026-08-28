@@ -196,12 +196,12 @@
             <div class="section-heading">
               <div>
                 <p class="eyebrow" id="bulk-scope">Whole semester</p>
-                <h2 id="bulk-title">Bulk group chat check</h2>
+                <h2 id="bulk-title">Bulk actions 跨班级</h2>
               </div>
               <button id="bulk-toggle-all" class="text-button" type="button">None</button>
             </div>
             <p class="bulk-hint">
-              Checks every student on the ticked class rosters, not just the rows selected above.
+              Runs on every student of the ticked class rosters, not just the rows selected above.
             </p>
             <div class="channel-row">
               <p class="group-label">Search in</p>
@@ -213,9 +213,18 @@
             </div>
             <p id="channel-hint" class="bulk-hint"></p>
             <div id="bulk-class-list" class="bulk-class-list"></div>
+            <p id="bulk-summary" class="bulk-hint">0 students</p>
+            <button id="bulk-generate" class="action-button generate" type="button">
+              <span>Generate comments</span>
+              <small>Overwrites Feedback for every ticked roster</small>
+            </button>
             <button id="bulk-check" class="action-button paste" type="button">
               <span>Check group chats</span>
-              <small id="bulk-summary">0 students</small>
+              <small>Uses the channel picked above</small>
+            </button>
+            <button id="bulk-paste" class="action-button paste" type="button">
+              <span>Paste comments</span>
+              <small>Pastes each student's Feedback, never sends</small>
             </button>
           </section>
 

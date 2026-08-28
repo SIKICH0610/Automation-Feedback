@@ -305,21 +305,21 @@ def class_review_paragraph(class_review: str, is_chinese: bool, *, kind: str = "
         if not class_review:
             if kind == "quiz":
                 return "家长您好～这次 quiz 的情况如下～"
-            return "家长您好～今天的课程主要是围绕本节的核心知识点、例题讲解和课堂练习展开～"
+            return "家长您好～我们的课程主要围绕核心知识点、例题讲解和课堂练习展开～"
         if class_review.startswith("家长"):
             return soften_zh(class_review)
         return f"家长您好～{soften_zh(class_review)}"
 
     if not class_review:
         if kind == "quiz":
-            return "Hello! Here is how this quiz went."
+            return "Hello parents! Here is how this quiz went."
         return (
-            "Hello! In today's class, we reviewed the main ideas for the lesson, "
-            "worked through examples, and practiced applying the methods in class."
+            "Hello parents! Our classes have focused on the core ideas, "
+            "worked through examples, and practiced applying the methods."
         )
-    if class_review.lower().startswith("hello"):
+    if class_review.lower().startswith(("hello", "dear")):
         return class_review
-    return f"Hello! {class_review}" + ("" if class_review.endswith((".", "!", "?")) else ".")
+    return f"Hello parents! {class_review}" + ("" if class_review.endswith((".", "!", "?")) else ".")
 
 
 def clean_parent_feedback_text(text: str) -> str:
@@ -334,11 +334,11 @@ def clean_parent_feedback_text(text: str) -> str:
 # Standing note about how homework works, appended to the personal comment so every
 # parent gets the submission instructions without the teacher retyping them.
 ZH_HOMEWORK_NOTE = (
-    "我们的作业是本讲内容之后的练习，孩子做完之后可以在 app 上提交，"
+    "我们的作业是配套的课后练习，孩子做完之后可以在 app 上提交，"
     "会有一些 coin 可以兑换小礼品～我也会及时查看作业，了解孩子的学习状况～"
 )
 EN_HOMEWORK_NOTE = (
-    "The homework covers what we did in this lesson. Once your child finishes it, "
+    "The homework matches what we covered in class. Once your child finishes it, "
     "they can submit it in the app and earn coins to redeem small prizes. I will "
     "review each submission so I can keep track of how your child is doing."
 )
@@ -384,12 +384,21 @@ def join_naturally(items: list[str], language: str) -> str:
     return ", ".join(items[:-1]) + f", and {items[-1]}"
 
 def homework_paragraph(student: StudentRow, is_chinese: bool) -> str | None:
+    """The teacher's Homework Reflection, ready to sit inside the middle paragraph.
+
+    It follows the standing homework note (which already introduces the topic), so
+    no "作业反馈：" style label -- the note flows straight into the reflection. A
+    colon label also read badly after clean_parent_feedback_text turned the colon
+    into a comma.
+    """
     homework = str(student.values.get("Homework Reflection") or "").strip()
     if not homework:
         return None
     if is_chinese:
-        return f"作业反馈：{homework}"
-    return f"Homework feedback: {homework}"
+        return soften_zh(homework)
+    if not homework.endswith((".", "!", "?")):
+        homework += "."
+    return f"On the homework, {homework}"
 
 def write_feedback(
     workbook: Any,

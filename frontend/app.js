@@ -386,7 +386,10 @@ function renderBulkSummary() {
   const selected = bulkSelectedSheets();
   const students = selected.reduce((total, sheet) => total + (counts[sheet] || 0), 0);
   elements.bulkSummary.textContent = `${selected.length} class(es), ${students} student(s)`;
-  elements.bulkCheck.disabled = state.busy || selected.length === 0;
+  const nothing = state.busy || selected.length === 0;
+  elements.bulkCheck.disabled = nothing;
+  if (elements.bulkGenerate) elements.bulkGenerate.disabled = nothing;
+  if (elements.bulkPaste) elements.bulkPaste.disabled = nothing;
   elements.bulkToggleAll.textContent = selected.length ? "None" : "All";
 }
 
@@ -439,41 +442,63 @@ function renderBulkClasses() {
   renderBulkSummary();
 }
 
-async function runBulkGroupChatCheck() {
+const BULK_ACTIONS = {
+  "check-group-chat-bulk": {
+    // Each student is a separate WeCom/WhatsApp search, so a full semester takes a
+    // while and holds onto the desktop app the whole time. Say so before starting.
+    confirm: (students, classes, minutes) =>
+      `Check group chats for ${students} student(s) across ${classes} class(es)?\n\n` +
+      `This searches WeCom and WhatsApp once per student and will take roughly ${minutes} minute(s), ` +
+      `using those apps the whole time. It only reads and never sends anything.`,
+    busyTitle: "Checking group chats",
+    busyDetail: "Keep WeCom and WhatsApp available.",
+    log: "Checking group chats for",
+  },
+  "generate-comments-bulk": {
+    confirm: (students, classes) =>
+      `Generate comments for ${students} student(s) across ${classes} class(es)?\n\n` +
+      `This overwrites the Feedback column for every student on the ticked rosters, ` +
+      `using each class's own lesson recap as the opening paragraph.`,
+    busyTitle: "Generating comments",
+    busyDetail: "Writing results into the database.",
+    log: "Generating comments for",
+  },
+  "paste-comments-bulk": {
+    confirm: (students, classes, minutes) =>
+      `Paste comments for ${students} student(s) across ${classes} class(es)?\n\n` +
+      `The robot will switch between apps and prepare each message, roughly ${minutes} minute(s) in total. ` +
+      `It will not press Send.`,
+    busyTitle: "Supervised paste running",
+    busyDetail: "Keep WeCom and WhatsApp available.",
+    log: "Pasting comments for",
+  },
+};
+
+async function runBulkAction(action) {
   if (state.busy) return;
+  const spec = BULK_ACTIONS[action];
   const sheets = bulkSelectedSheets();
   if (!sheets.length) {
-    toast("Tick at least one class to check.", true);
+    toast("Tick at least one class first.", true);
     return;
   }
   const groups = sheetGroups();
   const group = groups[activeGroupIndex(groups)] || { student_counts: {} };
   const counts = group.student_counts || {};
   const students = sheets.reduce((total, sheet) => total + (counts[sheet] || 0), 0);
-  // Each student is a separate WeCom/WhatsApp search, so a full semester takes a while
-  // and holds onto the desktop app the whole time. Say so before starting.
   const minutes = Math.max(1, Math.round((students * 3) / 60));
-  const confirmed = window.confirm(
-    `Check group chats for ${students} student(s) across ${sheets.length} class(es)?\n\n` +
-      `This searches WeCom and WhatsApp once per student and will take roughly ${minutes} minute(s), ` +
-      `using those apps the whole time. It only reads and never sends anything.`
-  );
-  if (!confirmed) return;
+  if (!window.confirm(spec.confirm(students, sheets.length, minutes))) return;
 
   try {
-    setBusy(
-      true,
-      "Checking group chats",
-      `${students} student(s) across ${sheets.length} class(es). Keep WeCom and WhatsApp available.`
-    );
+    setBusy(true, spec.busyTitle, `${students} student(s) across ${sheets.length} class(es). ${spec.busyDetail}`);
     setSaveState("Working", "neutral");
     await saveAll({ quiet: true });
-    setLog(`Checking group chats for: ${sheets.join(", ")}...`);
+    setLog(`${spec.log}: ${sheets.join(", ")}...`);
 
     const result = await api("/api/action", {
       method: "POST",
       body: JSON.stringify({
-        action: "check-group-chat-bulk",
+        action,
         sheets,
         channel: state.checkChannel,
       }),
@@ -1204,7 +1229,9 @@ function bindEvents() {
   elements.exportExcel.addEventListener("click", () => downloadExport("full", "Excel export"));
   elements.exportReport.addEventListener("click", () => downloadExport("report", "Report export"));
   elements.deleteSemester.addEventListener("click", deleteCurrentSemester);
-  elements.bulkCheck.addEventListener("click", runBulkGroupChatCheck);
+  elements.bulkCheck.addEventListener("click", () => runBulkAction("check-group-chat-bulk"));
+  elements.bulkGenerate.addEventListener("click", () => runBulkAction("generate-comments-bulk"));
+  elements.bulkPaste.addEventListener("click", () => runBulkAction("paste-comments-bulk"));
   document.querySelectorAll(".channel-segment").forEach((button) => {
     button.addEventListener("click", () => {
       state.checkChannel = button.dataset.channel;
@@ -1292,6 +1319,8 @@ async function initialize() {
     "bulkClassList",
     "bulkToggleAll",
     "bulkCheck",
+    "bulkGenerate",
+    "bulkPaste",
     "bulkSummary",
     "channelHint",
     "sheetTabs",

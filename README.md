@@ -137,11 +137,19 @@ right after an import — it tries WeCom first, then WhatsApp, and fills in
 `Parent Language` from whichever one found the chat, so later actions route correctly
 without anyone setting it by hand. If neither finds a match, the language is left blank.
 
-**Bulk group chat check** in the right-hand rail does the same across whole class
-rosters instead of selected rows. Untick any class you want to skip; unticked classes are
-remembered as you move between tabs. It verifies once up front that WeCom or WhatsApp is
-actually open and stops immediately if neither is, and never auto-opens an app during the
-batch — have the ones you need open first. Budget roughly three seconds per student.
+The **Bulk actions 跨班级** panel in the right-hand rail runs across whole class
+rosters instead of selected rows — every student of every ticked class in the current
+semester. Untick any class you want to skip; unticked classes are remembered as you move
+between tabs. Three actions share the class list:
+
+- **Generate comments** — regenerates the `Feedback` column for everyone, each class
+  opening with its own lesson recap. Overwrites what was there.
+- **Check group chats** — the check above, semester-wide.
+- **Paste comments** — the supervised paste, one student at a time, never pressing Send.
+
+The two desktop actions verify once up front that WeCom or WhatsApp is actually open and
+stop immediately if neither is, and never auto-open an app during the batch — have the
+ones you need open first. Budget roughly three seconds per student.
 
 ## Managing the roster
 

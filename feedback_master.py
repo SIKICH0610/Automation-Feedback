@@ -128,10 +128,13 @@ class FeedbackGenerator:
             else:
                 personal_paragraphs = [append_homework_note("", is_chinese)]
 
-        paragraphs = [class_paragraph, *personal_paragraphs]
-        if homework:
-            paragraphs.append(homework)
-        feedback = clean_parent_feedback_text("\n\n".join(paragraphs))
+        # Always exactly three paragraphs -- greeting, one middle block, closing --
+        # so a homework reflection or a comprehensive run's quiz+general pair can
+        # never stretch the message to four.
+        middle_parts = [part.strip() for part in [*personal_paragraphs, homework or ""] if part and part.strip()]
+        joiner = "" if is_chinese else " "
+        middle = joiner.join(middle_parts)
+        feedback = clean_parent_feedback_text("\n\n".join([class_paragraph, middle] if middle else [class_paragraph]))
         return append_parent_closing(feedback, is_chinese)
 
 def generate_feedback(

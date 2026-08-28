@@ -106,7 +106,7 @@ def general_comment_paragraph(
             return base
         if observations:
             base = (
-                f"{name} 今天整体表现稳定，"
+                f"{name} 课堂整体表现稳定，"
                 f"{join_naturally(observations, student.language)}。之后可以继续保持好的课堂习惯，"
                 "同时在证明逻辑和细节检查上多练习。"
             )
@@ -120,11 +120,11 @@ def general_comment_paragraph(
         raw_additional = str(student.values.get(ADDITIONAL_COMMENT_COLUMN) or "").strip()
         if raw_additional:
             return f"{name} {raw_additional}。"
-        return f"{name} 今天的课堂表现已记录，之后可以继续保持稳定的学习节奏。"
+        return f"{name} 的课堂表现已记录，之后可以继续保持稳定的学习节奏。"
 
     if observations:
         base = (
-            f"{name} had a steady class today and "
+            f"{name} has been steady in class and "
             f"{join_naturally(observations, student.language)}. Continuing to build proof logic "
             "while checking details carefully will be helpful."
         )
@@ -142,4 +142,4 @@ def general_comment_paragraph(
     # unchanged into an English message.
     if raw_additional and raw_additional.isascii():
         return f"{name} {raw_additional}."
-    return f"{name}'s classroom notes have been recorded for today's lesson."
+    return f"{name}'s classroom notes have been recorded."

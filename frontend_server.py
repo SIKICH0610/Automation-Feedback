@@ -279,72 +279,44 @@ class ActionRunner:
                 sheets.append(sheet_name)
         return sheets
 
-    def _run_bulk_group_chat(
+    def _run_bulk(
         self,
         payload: dict[str, Any],
         environment: dict[str, str],
     ) -> dict[str, Any]:
-        """Run the group-chat check across whole class rosters, one class at a time.
+        """Run one action across whole class rosters, one class at a time.
 
-        paste_sender.py takes a single --sheet, so this loops it per class rather than
-        teaching it about multiple sheets. The runtime workbook is prepared once and
-        synced back once at the end, so every class's results land in the database
-        together even though each class ran as its own subprocess.
+        The tools take a single --sheet, so this loops per class rather than teaching
+        them about multiple sheets. The runtime workbook is prepared once and synced
+        back once at the end, so every class's results land in the database together
+        even though each class ran as its own subprocess.
+
+        check-group-chat-bulk and paste-comments-bulk drive the desktop apps and get
+        the availability probe; generate-comments-bulk only writes the database.
         """
+        action = str(payload.get("action") or "").strip()
         sheets = self._bulk_group_chat_sheets(payload)
         channel = self._check_channel(payload)
+        needs_desktop = action != "generate-comments-bulk"
 
-        # Probe the desktop apps once up front. Without this, an unavailable app makes
-        # every single student re-attempt a launch that cannot succeed -- slow, and for
-        # WhatsApp it opens a web.whatsapp.com browser tab per student. Since readiness
-        # is established here, the per-class runs below use --no-auto-open so a long
-        # unattended batch never tries to open anything on its own.
-        #
-        # The probe runs as its own process rather than importing pywinauto here: COM
-        # misbehaves on the threaded HTTP server's request threads, where an in-process
-        # probe was observed to hang instead of returning.
-        try:
-            probe = subprocess.run(
-                [*worker_command("paste_sender"), "--check-apps"],
-                cwd=PROJECT_DIR,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=APP_PROBE_TIMEOUT_SECONDS,
-                env=environment,
-                check=False,
-            )
-            statuses = json.loads(probe.stdout.strip() or "{}")
-        except (subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
-            raise FrontendError(
-                "Could not determine whether WeCom or WhatsApp is open. "
-                "Make sure at least one is running, then try again."
-            ) from exc
+        statuses: dict[str, Any] = {}
+        if needs_desktop:
+            statuses = self._probe_desktop_apps(environment, channel)
 
+        verb = {
+            "check-group-chat-bulk": "Checked group chats",
+            "generate-comments-bulk": "Generated comments",
+            "paste-comments-bulk": "Pasted comments",
+        }[action]
         available = [key for key, status in statuses.items() if status.get("window_found")]
-        # A forced channel needs that specific app; auto just needs something to work with.
-        required = [channel] if channel != "auto" else list(statuses)
-        if not any(key in available for key in required):
-            details = "; ".join(
-                f"{statuses[key].get('display_name', key)}: {statuses[key].get('message', 'unavailable')}"
-                for key in required
-                if key in statuses
-            )
-            wanted = (
-                statuses.get(channel, {}).get("display_name", channel)
-                if channel != "auto"
-                else "Neither WeCom nor WhatsApp"
-            )
-            raise FrontendError(
-                f"{wanted} has no open window, so nothing can be checked. "
-                f"Open it and try again. ({details})"
-            )
-
-        sections: list[str] = [
-            f"Channel: {channel} | available apps: "
-            + ", ".join(statuses[key].get("display_name", key) for key in available)
-        ]
+        sections = (
+            [
+                f"Channel: {channel} | available apps: "
+                + ", ".join(statuses[key].get("display_name", key) for key in available)
+            ]
+            if needs_desktop
+            else [f"{verb.split()[0]} across {len(sheets)} class roster(s)."]
+        )
         failed_sheets: list[str] = []
         checked_sheets = 0
 
@@ -361,22 +333,51 @@ class ActionRunner:
                         sections.append(f"===== {sheet_name} =====\n(no students on this roster)")
                         continue
 
-                    command = [
-                        *worker_command("paste_sender"),
+                    common = [
                         "--workbook",
                         str(self.store.workbook_path),
                         "--sheet",
                         sheet_name,
                         "--rows",
                         ",".join(str(row) for row in sorted(rows)),
-                        "--action",
-                        "check-group-chat",
-                        "--mode",
-                        "paste-only",
-                        "--no-auto-open",
-                        "--channel",
-                        channel,
                     ]
+                    if action == "generate-comments-bulk":
+                        command = [
+                            *worker_command("feedback_generator"),
+                            *common,
+                            "--write",
+                            "--feedback-type",
+                            "general",
+                            "--feedback-column",
+                            "Feedback",
+                            # Each class opens with its own lesson recap.
+                            "--class-review",
+                            self.store.read_lesson_recap(sheet_name),
+                        ]
+                    elif action == "paste-comments-bulk":
+                        command = [
+                            *worker_command("paste_sender"),
+                            *common,
+                            "--action",
+                            "comment",
+                            "--message-column",
+                            "Feedback",
+                            "--mode",
+                            "paste-only",
+                            "--no-auto-open",
+                        ]
+                    else:
+                        command = [
+                            *worker_command("paste_sender"),
+                            *common,
+                            "--action",
+                            "check-group-chat",
+                            "--mode",
+                            "paste-only",
+                            "--no-auto-open",
+                            "--channel",
+                            channel,
+                        ]
                     try:
                         completed = subprocess.run(
                             command,
@@ -410,7 +411,7 @@ class ActionRunner:
                 self.store.sync_runtime_workbook()
                 self.store.remove_runtime_workbook()
 
-        label = f"Checked group chats for {checked_sheets} class(es)"
+        label = f"{verb} for {checked_sheets} class(es)"
         if failed_sheets:
             label += f"; {len(failed_sheets)} had errors"
         output = "\n\n".join(sections)
@@ -423,14 +424,72 @@ class ActionRunner:
             "output": output,
         }
 
+    def _probe_desktop_apps(
+        self,
+        environment: dict[str, str],
+        channel: str,
+    ) -> dict[str, Any]:
+        # Probe the desktop apps once up front. Without this, an unavailable app makes
+        # every single student re-attempt a launch that cannot succeed -- slow, and for
+        # WhatsApp it opens a web.whatsapp.com browser tab per student. Since readiness
+        # is established here, the per-class runs below use --no-auto-open so a long
+        # unattended batch never tries to open anything on its own.
+        #
+        # The probe runs as its own process rather than importing pywinauto here: COM
+        # misbehaves on the threaded HTTP server's request threads, where an in-process
+        # probe was observed to hang instead of returning.
+        try:
+            probe = subprocess.run(
+                [*worker_command("paste_sender"), "--check-apps"],
+                cwd=PROJECT_DIR,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=APP_PROBE_TIMEOUT_SECONDS,
+                env=environment,
+                check=False,
+            )
+            statuses: dict[str, Any] = json.loads(probe.stdout.strip() or "{}")
+        except (subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+            raise FrontendError(
+                "Could not determine whether WeCom or WhatsApp is open. "
+                "Make sure at least one is running, then try again."
+            ) from exc
+
+        available = [key for key, status in statuses.items() if status.get("window_found")]
+        # A forced channel needs that specific app; auto just needs something to work with.
+        required = [channel] if channel != "auto" else list(statuses)
+        if not any(key in available for key in required):
+            details = "; ".join(
+                f"{statuses[key].get('display_name', key)}: {statuses[key].get('message', 'unavailable')}"
+                for key in required
+                if key in statuses
+            )
+            wanted = (
+                statuses.get(channel, {}).get("display_name", channel)
+                if channel != "auto"
+                else "Neither WeCom nor WhatsApp"
+            )
+            raise FrontendError(
+                f"{wanted} has no open window, so nothing can be checked. "
+                f"Open it and try again. ({details})"
+            )
+
+        return statuses
+
     def run(self, payload: dict[str, Any]) -> dict[str, Any]:
         environment = os.environ.copy()
         environment["PYTHONUTF8"] = "1"
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
         environment["FEEDBACK_DATABASE_PATH"] = str(self.store.database_path)
 
-        if str(payload.get("action") or "").strip() == "check-group-chat-bulk":
-            return self._run_bulk_group_chat(payload, environment)
+        if str(payload.get("action") or "").strip() in {
+            "check-group-chat-bulk",
+            "generate-comments-bulk",
+            "paste-comments-bulk",
+        }:
+            return self._run_bulk(payload, environment)
 
         attachment_ids = self._attachment_ids(payload)
         with TemporaryDirectory(
