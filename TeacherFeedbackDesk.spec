@@ -45,7 +45,10 @@ exe = EXE(
     console=False,
     disable_windowed_traceback=False,
     target_arch=None,
-    codesign_identity=None,
+    # Self-signed identity from the login keychain. Signing every build with the
+    # SAME certificate is what lets macOS keep the Accessibility grant across
+    # updates -- ad-hoc signatures change fingerprint per build and lose it.
+    codesign_identity="Think Academy Automation",
     entitlements_file=None,
 )
 
