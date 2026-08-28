@@ -200,6 +200,30 @@ Editing a downloaded file does not change the database. Scripted callers can use
 `POST /api/export` or `POST /api/export/report` with an optional `{"semester": "..."}`
 body, which writes into `exports/` and returns the path instead of streaming a download.
 
+## Building the macOS app
+
+```bash
+./.venv/bin/python -m PyInstaller TeacherFeedbackDesk.spec --noconfirm
+```
+
+That produces `dist/Teacher Feedback Desk.app` (ad-hoc signed). Wrap it in a DMG:
+
+```bash
+STAGE=$(mktemp -d) && cp -R "dist/Teacher Feedback Desk.app" "$STAGE/" && ln -s /Applications "$STAGE/Applications" && hdiutil create -volname "Teacher Feedback Desk" -srcfolder "$STAGE" -ov -format UDZO "dist/Teacher Feedback Desk.dmg" && rm -rf "$STAGE"
+```
+
+The packaged app keeps its data in `~/Library/Application Support/Teacher Feedback
+Desk/` — database, announcements, exports, and an `app.log` with startup lines and
+crash tracebacks (a windowed app has no console). To seed a fresh install with an
+existing roster, copy the project's `app_data/feedback.db` into that folder's
+`app_data/` before first launch; otherwise the bundled workbook is imported once.
+
+Launch it by double-clicking (or `open`); running the binary inside `Contents/MacOS`
+directly starts the server but never shows the window. On another Mac the ad-hoc
+signature means the first launch needs right-click → Open. The app needs its own
+Accessibility and Automation grants in System Settings — the ones given to the dev
+Python don't carry over — and, as always, quit and reopen the app after granting.
+
 ## Platform support
 
 | | Windows | macOS |
