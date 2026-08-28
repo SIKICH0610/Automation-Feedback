@@ -12,3 +12,6 @@ announcements/
 
 # Excel writes these lock files next to an open workbook
 ~$*
+
+# macOS Finder metadata
+.DS_Store
