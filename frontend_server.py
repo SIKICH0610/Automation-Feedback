@@ -870,14 +870,12 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
-    # A frozen build relaunching itself as one of its CLI tools comes through here
-    # first; everything after this line is the normal server start.
-    if len(sys.argv) > 1 and sys.argv[1] == "--worker":
-        run_worker(sys.argv[2:])
-        return
+def create_app_server(args: argparse.Namespace) -> ThreadingHTTPServer:
+    """Build the store, wire the handler, and return a ready-to-serve HTTP server.
 
-    args = build_parser().parse_args()
+    Shared by the browser entry below and desktop_app's native window, which serves
+    the same app on an ephemeral port inside a webview instead of a browser tab.
+    """
     store = WorkbookStore(
         database_path=args.database,
         source_workbook_path=args.workbook,
@@ -887,13 +885,23 @@ def main() -> None:
     )
     FrontendHandler.store = store
     FrontendHandler.runner = ActionRunner(store)
+    return ThreadingHTTPServer((args.host, args.port), FrontendHandler)
 
-    server = ThreadingHTTPServer((args.host, args.port), FrontendHandler)
+
+def main() -> None:
+    # A frozen build relaunching itself as one of its CLI tools comes through here
+    # first; everything after this line is the normal server start.
+    if len(sys.argv) > 1 and sys.argv[1] == "--worker":
+        run_worker(sys.argv[2:])
+        return
+
+    args = build_parser().parse_args()
+    server = create_app_server(args)
     host, port = server.server_address[:2]
     url = f"http://{host}:{port}"
     print(f"Feedback frontend: {url}")
-    print(f"Database: {store.database_path}")
-    print(f"Initial import source: {store.source_workbook_path}")
+    print(f"Database: {FrontendHandler.store.database_path}")
+    print(f"Initial import source: {FrontendHandler.store.source_workbook_path}")
     print("Press Ctrl+C to stop.")
 
     if not args.no_browser:
