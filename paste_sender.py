@@ -160,30 +160,62 @@ def process_is_running(process_names: tuple[str, ...], *, mac_process_name: str 
     return any(process_name.lower() in output_lower for process_name in process_names)
 
 
+def mac_permission_hint(error_text: str) -> str:
+    """Map a macOS TCC refusal to the exact setting the user must flip.
+
+    Both errors surface as osascript stderr. They used to be swallowed into
+    "window was not found", which pointed people at WeCom instead of at the
+    missing grant -- a packaged app has its own TCC identity, so grants given to
+    the dev Python do not carry over.
+    """
+    text = error_text or ""
+    if "-1743" in text or "Not authorized to send Apple events" in text:
+        return (
+            "这台电脑还没有允许本 App 控制 System Events（自动化权限）。"
+            "请打开 系统设置 → 隐私与安全性 → 自动化，找到本 App，勾选 System Events，"
+            "然后完全退出并重新打开本 App。"
+        )
+    if "-25211" in text or "assistive access" in text:
+        return (
+            "这台电脑还没有给本 App 辅助功能权限。"
+            "请打开 系统设置 → 隐私与安全性 → 辅助功能，把本 App 加入并打开开关，"
+            "然后完全退出并重新打开本 App。"
+        )
+    return ""
+
+
+def _mac_window_probe(mac_process_name: str) -> tuple[bool, str]:
+    """(window found, permission error). Permission errors are not "no window"."""
+    # The statements have to live inside run()'s body -- inlining them after a
+    # `return` is a JavaScript syntax error, which silently made this report "no
+    # window" for every app it was ever asked about.
+    script = (
+        "function run() {"
+        '  const se = Application("System Events");'
+        f"  const procs = se.processes.whose({{name: {json.dumps(mac_process_name)}}});"
+        "  return procs.length > 0 && procs[0].windows.length > 0;"
+        "}"
+    )
+    try:
+        result = subprocess.run(
+            ["osascript", "-l", "JavaScript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except Exception as exc:
+        return False, mac_permission_hint(str(exc))
+    if result.returncode != 0:
+        return False, mac_permission_hint(result.stderr)
+    return result.stdout.strip() == "true", ""
+
+
 def app_window_found(title_re: str, *, mac_process_name: str | None = None) -> bool:
     if sys.platform == "darwin":
         if not mac_process_name or not process_is_running((), mac_process_name=mac_process_name):
             return False
-        # The statements have to live inside run()'s body -- inlining them after a
-        # `return` is a JavaScript syntax error, which silently made this report "no
-        # window" for every app it was ever asked about.
-        script = (
-            "function run() {"
-            '  const se = Application("System Events");'
-            f"  const procs = se.processes.whose({{name: {json.dumps(mac_process_name)}}});"
-            "  return procs.length > 0 && procs[0].windows.length > 0;"
-            "}"
-        )
-        try:
-            result = subprocess.run(
-                ["osascript", "-l", "JavaScript", "-e", script],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-        except Exception:
-            return False
-        return result.returncode == 0 and result.stdout.strip() == "true"
+        found, _ = _mac_window_probe(mac_process_name)
+        return found
 
     return find_window_by_title_re(title_re) is not None
 
@@ -193,12 +225,20 @@ def app_window_found(title_re: str, *, mac_process_name: str | None = None) -> b
 def app_status(spec: DesktopAppSpec) -> DesktopAppStatus:
     dependency_ok, dependency_error = automation_dependency_status()
     running = process_is_running(spec.process_names, mac_process_name=spec.mac_process_name)
-    window_found = (
-        app_window_found(spec.title_re, mac_process_name=spec.mac_process_name) if dependency_ok else False
-    )
+    permission_error = ""
+    if not dependency_ok:
+        window_found = False
+    elif sys.platform == "darwin":
+        window_found = False
+        if spec.mac_process_name and running:
+            window_found, permission_error = _mac_window_probe(spec.mac_process_name)
+    else:
+        window_found = app_window_found(spec.title_re, mac_process_name=spec.mac_process_name)
 
     if not dependency_ok:
         message = "desktop automation dependencies are not available"
+    elif permission_error:
+        message = permission_error
     elif window_found:
         message = "window found"
     elif running:
@@ -214,6 +254,7 @@ def app_status(spec: DesktopAppSpec) -> DesktopAppStatus:
         window_found=window_found,
         message=message,
         dependency_error=dependency_error,
+        permission_error=permission_error,
     )
 
 
@@ -838,6 +879,8 @@ def ensure_desktop_ready(
             "Desktop automation dependencies are not available. "
             "Run: python -m pip install -r requirements.txt"
         )
+    if status.permission_error:
+        raise RuntimeError(status.permission_error)
     if not status.window_found:
         raise RuntimeError("Needed app window is not available.")
     return status
@@ -890,7 +933,9 @@ def _run_wecom_job_mac(job: PasteJob, *, args: argparse.Namespace) -> JobResult:
     try:
         robot.focus_window()
     except WeComAutomationError as exc:
-        return JobResult(status="needs_review", error=str(exc))
+        # A TCC refusal reads like an automation failure; point at the actual
+        # setting instead of at WeCom.
+        return JobResult(status="needs_review", error=mac_permission_hint(str(exc)) or str(exc))
 
     try:
         robot.search_and_open_top_result(job.search_key)
@@ -1284,6 +1329,7 @@ def main(
                 "process_running": status.process_running,
                 "dependency_ok": status.dependency_ok,
                 "message": status.message,
+                "permission_error": status.permission_error,
             }
             for key, status in ((k, app_status(spec)) for k, spec in specs.items())
         }

@@ -43,6 +43,9 @@ class DesktopAppStatus:
     launched: bool = False
     message: str = ""
     dependency_error: str = ""
+    # Set when the OS refused the automation call itself (macOS TCC): the app lacks
+    # the Automation or Accessibility grant, which is different from "no window".
+    permission_error: str = ""
 
 
 @dataclass

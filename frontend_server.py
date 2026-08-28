@@ -477,6 +477,10 @@ class ActionRunner:
         available = [key for key, status in statuses.items() if status.get("window_found")]
         # A forced channel needs that specific app; auto just needs something to work with.
         required = [channel] if channel != "auto" else list(statuses)
+        for key in required:
+            permission_error = str(statuses.get(key, {}).get("permission_error") or "")
+            if permission_error:
+                raise FrontendError(permission_error)
         if not any(key in available for key in required):
             details = "; ".join(
                 f"{statuses[key].get('display_name', key)}: {statuses[key].get('message', 'unavailable')}"
