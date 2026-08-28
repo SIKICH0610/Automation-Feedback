@@ -5,6 +5,8 @@ set -euo pipefail
 
 IDENTITY="Think Academy Automation"
 APP="dist/Teacher Feedback Desk.app"
+VOLNAME="Teacher Feedback Desk"
+DMG="dist/Teacher Feedback Desk.dmg"
 
 ./.venv/bin/python -m PyInstaller TeacherFeedbackDesk.spec --noconfirm
 
@@ -16,14 +18,27 @@ APP="dist/Teacher Feedback Desk.app"
 codesign --force --deep --sign "$IDENTITY" "$APP"
 codesign --verify --deep --strict "$APP"
 
+# Styled DMG: an icon-view window whose background literally tells the teacher
+# to drag the app onto Applications. Without it, people double-click the app
+# inside the mounted DMG and their permission grants never line up. create-dmg
+# handles the Finder layout; plain AppleScript view-option setting broke on
+# recent macOS (-10006).
 STAGE=$(mktemp -d)
 cp -R "$APP" "$STAGE/"
-ln -s /Applications "$STAGE/Applications"
-rm -f "dist/Teacher Feedback Desk.dmg"
-hdiutil create -volname "Teacher Feedback Desk" -srcfolder "$STAGE" -ov -format UDZO "dist/Teacher Feedback Desk.dmg"
+rm -f "$DMG"
+create-dmg \
+  --volname "$VOLNAME" \
+  --background dmg_background.png \
+  --window-size 600 440 \
+  --icon-size 96 \
+  --icon "Teacher Feedback Desk.app" 150 195 \
+  --app-drop-link 450 195 \
+  --hide-extension "Teacher Feedback Desk.app" \
+  --no-internet-enable \
+  "$DMG" "$STAGE" >/dev/null
 rm -rf "$STAGE"
 
 echo ""
 echo "Done: $APP"
-echo "      dist/Teacher Feedback Desk.dmg"
+echo "      $DMG"
 echo "Install locally with:  rm -rf '/Applications/Teacher Feedback Desk.app' && ditto \"$APP\" '/Applications/Teacher Feedback Desk.app'"
