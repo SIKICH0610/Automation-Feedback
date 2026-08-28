@@ -70,14 +70,14 @@ It opens `http://127.0.0.1:8765` in the browser. Keep the terminal open while us
 ### Lesson recap → the opening paragraph
 
 The **Lesson recap 本节课内容回顾** box in the right-hand rail is what the generated
-comment opens with. Write only the topics covered — the greeting and sentence frame are
-added for you:
+comment opens with. Your wording is used verbatim — the only thing added is the
+greeting in front:
 
-> recap: `三角形全等的判定、勾股定理的应用`
-> becomes: 家长您好～我们今天的课程主要围绕三角形全等的判定、勾股定理的应用展开～
+> recap: `今天的课程主要围绕三角形全等的判定、勾股定理的应用展开`
+> becomes: 家长您好～今天的课程主要围绕三角形全等的判定、勾股定理的应用展开～
 
-A recap that already ends in its own punctuation is treated as a finished sentence and
-kept as written, so you can also just type the whole opening line yourself.
+Left empty, a generic recap sentence fills in after the greeting instead. A recap that
+already starts with 家长 is kept whole, greeting and all.
 
 This is deliberately **separate from the Announcement box**. The announcement is text
 you blast to a whole class, and reusing it here used to put things like "next week is

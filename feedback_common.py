@@ -293,21 +293,22 @@ def soften_zh(text: str) -> str:
 
 
 def class_review_paragraph(class_review: str, is_chinese: bool, *, kind: str = "lesson") -> str:
-    """Paragraph 1. kind="lesson" wraps a bare topic list in the lesson sentence frame;
-    kind="quiz" leaves the teacher's quiz write-up alone, since that frame turns
-    "满分 8 分，班级平均 6.9/8" into "课程主要围绕满分 8 分...展开"."""
+    """Paragraph 1: the greeting plus whatever the teacher wrote, verbatim.
+
+    A written recap only ever gets "家长您好～" put in front of it -- the
+    "今天的课程主要围绕...展开" sentence frame is exclusively the fallback for an
+    empty box, so the teacher's own wording is never rewritten around. kind picks
+    which fallback fits (lesson vs quiz)."""
     class_review = class_review.strip()
 
     if is_chinese:
         if not class_review:
             if kind == "quiz":
                 return "家长您好～这次 quiz 的情况如下～"
-            return "家长您好～我们今天的课程主要围绕本节的核心知识点、例题讲解和课堂练习展开～"
+            return "家长您好～今天的课程主要是围绕本节的核心知识点、例题讲解和课堂练习展开～"
         if class_review.startswith("家长"):
             return soften_zh(class_review)
-        if kind == "quiz" or class_review.endswith(ZH_RECAP_SENTENCE_ENDINGS):
-            return f"家长您好～{soften_zh(class_review)}"
-        return f"家长您好～我们今天的课程主要围绕{class_review}展开～"
+        return f"家长您好～{soften_zh(class_review)}"
 
     if not class_review:
         if kind == "quiz":
@@ -318,11 +319,7 @@ def class_review_paragraph(class_review: str, is_chinese: bool, *, kind: str = "
         )
     if class_review.lower().startswith("hello"):
         return class_review
-    if kind == "quiz":
-        return f"Hello! {class_review}" + ("" if class_review.endswith((".", "!", "?")) else ".")
-    if class_review.endswith((".", "!", "?")):
-        return f"Hello! {class_review}"
-    return f"Hello! In today's class, we focused on {class_review}."
+    return f"Hello! {class_review}" + ("" if class_review.endswith((".", "!", "?")) else ".")
 
 
 def clean_parent_feedback_text(text: str) -> str:
