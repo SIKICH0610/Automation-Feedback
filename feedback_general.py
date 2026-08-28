@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from feedback_common import (
+    ADDITIONAL_COMMENT_COLUMN,
     StudentRow,
     additional_comment_for_local_message,
     join_naturally,
@@ -112,6 +113,13 @@ def general_comment_paragraph(
             if additional_comment:
                 return f"{base}{additional_comment}。"
             return base
+        # No teacher remark and no observations: the Additional Comment is the only
+        # student-specific thing there is to say, so it leads. It used to be dropped
+        # here entirely, and appending it after the generic line read backwards --
+        # filler first, the real content as an afterthought.
+        raw_additional = str(student.values.get(ADDITIONAL_COMMENT_COLUMN) or "").strip()
+        if raw_additional:
+            return f"{name} {raw_additional}。"
         return f"{name} 今天的课堂表现已记录，之后可以继续保持稳定的学习节奏。"
 
     if observations:
@@ -128,4 +136,10 @@ def general_comment_paragraph(
         if additional_comment:
             return f"{base} {additional_comment}."
         return base
+    raw_additional = str(student.values.get(ADDITIONAL_COMMENT_COLUMN) or "").strip()
+    # Same as the Chinese branch above. The ASCII check mirrors
+    # additional_comment_for_local_message: a note written in Chinese cannot be dropped
+    # unchanged into an English message.
+    if raw_additional and raw_additional.isascii():
+        return f"{name} {raw_additional}."
     return f"{name}'s classroom notes have been recorded for today's lesson."
