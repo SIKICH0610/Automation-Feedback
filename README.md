@@ -149,9 +149,12 @@ between tabs. Three actions share the class list:
 - **Check group chats** — the check above, semester-wide.
 - **Paste comments** — the supervised paste, one student at a time, never pressing Send.
 
-The two desktop actions verify once up front that WeCom or WhatsApp is actually open and
-stop immediately if neither is, and never auto-open an app during the batch — have the
-ones you need open first. Budget roughly three seconds per student.
+The two desktop actions take care of WeCom themselves: its window is brought up (or
+restored from the Dock) before the batch starts, and minimized again when the batch
+finishes, so WeCom can just sit in the background between runs. WhatsApp is still
+checked up front and must already be open — the batch stops immediately with a clear
+message if a needed app is unavailable, and never opens anything mid-batch. Budget
+roughly three seconds per student.
 
 ## Managing the roster
 

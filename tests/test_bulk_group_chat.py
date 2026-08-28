@@ -47,6 +47,7 @@ class BulkGroupChatTest(unittest.TestCase):
         self.store = FakeStore({"Class A": 3, "Class B": 2, "Empty Class": 0})
         self.runner = ActionRunner(self.store)
         self.commands: list[list[str]] = []
+        self.utility_commands: list[list[str]] = []
         self._real_run = frontend_server.subprocess.run
 
     def tearDown(self) -> None:
@@ -59,6 +60,21 @@ class BulkGroupChatTest(unittest.TestCase):
             if "--check-apps" in command:
                 return types.SimpleNamespace(
                     stdout=json.dumps(probe), stderr="", returncode=0
+                )
+            if "--prepare-app" in command:
+                self.utility_commands.append(list(command))
+                found = probe.get("wecom", {}).get("window_found", False)
+                return types.SimpleNamespace(
+                    stdout=json.dumps(
+                        {"window_found": found, "launched": not found, "message": "", "permission_error": ""}
+                    ),
+                    stderr="",
+                    returncode=0,
+                )
+            if "--minimize-app" in command:
+                self.utility_commands.append(list(command))
+                return types.SimpleNamespace(
+                    stdout=json.dumps({"ok": True, "message": "minimized:1"}), stderr="", returncode=0
                 )
             self.commands.append(list(command))
             sheet = command[command.index("--sheet") + 1]
@@ -158,6 +174,24 @@ class BulkGroupChatTest(unittest.TestCase):
         "wecom": {"display_name": "WeCom", "window_found": True, "message": "window found"},
         "whatsapp": {"display_name": "WhatsApp", "window_found": False, "message": "not running"},
     }
+
+    def test_wecom_is_prepared_first_and_minimized_after(self) -> None:
+        self._stub_subprocess(probe=self.BOTH_OPEN)
+        self.runner.run(
+            {"action": "check-group-chat-bulk", "sheets": ["Class A"], "channel": "wecom"}
+        )
+        flags = [
+            ("--prepare-app" if "--prepare-app" in command else "--minimize-app")
+            for command in self.utility_commands
+        ]
+        self.assertEqual(flags, ["--prepare-app", "--minimize-app"])
+
+    def test_whatsapp_channel_does_not_touch_wecom(self) -> None:
+        self._stub_subprocess(probe=self.BOTH_OPEN)
+        self.runner.run(
+            {"action": "check-group-chat-bulk", "sheets": ["Class A"], "channel": "whatsapp"}
+        )
+        self.assertEqual(self.utility_commands, [])
 
     def test_channel_is_passed_through_to_each_class(self) -> None:
         self._stub_subprocess(probe=self.BOTH_OPEN)

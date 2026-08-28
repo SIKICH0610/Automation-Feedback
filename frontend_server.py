@@ -316,6 +316,17 @@ class ActionRunner:
         channel = self._check_channel(payload)
         needs_desktop = action != "generate-comments-bulk"
 
+        wecom_wanted = needs_desktop and channel in ("auto", "wecom")
+        if wecom_wanted:
+            # WeCom normally sits in the background with its window closed or
+            # minimized. Bring the window up before probing so the batch can start,
+            # instead of refusing with "no open window"; it is minimized again below
+            # once the batch finishes.
+            preparation = self._app_utility(environment, "--prepare-app", "wecom")
+            permission_error = str(preparation.get("permission_error") or "")
+            if permission_error:
+                raise FrontendError(permission_error)
+
         statuses: dict[str, Any] = {}
         if needs_desktop:
             statuses = self._probe_desktop_apps(environment, channel)
@@ -428,6 +439,10 @@ class ActionRunner:
                 self.store.sync_runtime_workbook()
                 self.store.remove_runtime_workbook()
 
+        if wecom_wanted and "wecom" in available:
+            # Tidy up: the batch is done with WeCom, put its window back in the Dock.
+            self._app_utility(environment, "--minimize-app", "wecom", best_effort=True)
+
         label = f"{verb} for {checked_sheets} class(es)"
         if failed_sheets:
             label += f"; {len(failed_sheets)} had errors"
@@ -440,6 +455,39 @@ class ActionRunner:
             "returncode": 1 if failed_sheets else 0,
             "output": output,
         }
+
+    def _app_utility(
+        self,
+        environment: dict[str, str],
+        flag: str,
+        app_key: str,
+        *,
+        best_effort: bool = False,
+    ) -> dict[str, Any]:
+        """Run one of paste_sender's app utilities (--prepare-app / --minimize-app).
+
+        Same subprocess pattern as the availability probe: the desktop-automation
+        layers must not run on the threaded server's own threads.
+        """
+        try:
+            completed = subprocess.run(
+                [*worker_command("paste_sender"), flag, app_key],
+                cwd=PROJECT_DIR,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=APP_PROBE_TIMEOUT_SECONDS,
+                env=environment,
+                check=False,
+            )
+            return json.loads(completed.stdout.strip() or "{}")
+        except (subprocess.TimeoutExpired, json.JSONDecodeError):
+            if best_effort:
+                return {}
+            raise FrontendError(
+                f"Could not prepare {app_key} for the batch. Open it manually and try again."
+            )
 
     def _probe_desktop_apps(
         self,

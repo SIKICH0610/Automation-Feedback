@@ -222,6 +222,89 @@ def app_window_found(title_re: str, *, mac_process_name: str | None = None) -> b
 
 
 
+def unminimize_app_window(spec: DesktopAppSpec) -> None:
+    """Restore minimized windows, best effort.
+
+    Activating an app does NOT bring a minimized window back on macOS (verified:
+    AXMinimized stays true after `activate`), so a batch that minimized WeCom at
+    the end would leave the next batch typing into nothing.
+    """
+    if sys.platform == "darwin":
+        if not spec.mac_process_name:
+            return
+        script = (
+            "function run() {"
+            '  const se = Application("System Events");'
+            f"  const procs = se.processes.whose({{name: {json.dumps(spec.mac_process_name)}}});"
+            '  if (procs.length === 0) return "no-process";'
+            "  const wins = procs[0].windows();"
+            "  for (let i = 0; i < wins.length; i++) {"
+            '    try { wins[i].attributes["AXMinimized"].value = false; } catch (e) {}'
+            "  }"
+            '  return "ok";'
+            "}"
+        )
+        try:
+            subprocess.run(
+                ["osascript", "-l", "JavaScript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except Exception:
+            pass
+        return
+
+    window = find_window_by_title_re(spec.title_re)
+    if window is not None:
+        try:
+            window.restore()
+        except Exception:
+            pass
+
+
+def minimize_app_window(spec: DesktopAppSpec) -> dict[str, Any]:
+    """Minimize the app's windows, so a finished batch leaves the screen as it was."""
+    if sys.platform == "darwin":
+        if not spec.mac_process_name:
+            return {"ok": False, "message": "no mac process name configured"}
+        script = (
+            "function run() {"
+            '  const se = Application("System Events");'
+            f"  const procs = se.processes.whose({{name: {json.dumps(spec.mac_process_name)}}});"
+            '  if (procs.length === 0) return "no-process";'
+            "  const wins = procs[0].windows();"
+            "  let count = 0;"
+            "  for (let i = 0; i < wins.length; i++) {"
+            '    try { wins[i].attributes["AXMinimized"].value = true; count++; } catch (e) {}'
+            "  }"
+            '  return "minimized:" + count;'
+            "}"
+        )
+        try:
+            result = subprocess.run(
+                ["osascript", "-l", "JavaScript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+        if result.returncode != 0:
+            hint = mac_permission_hint(result.stderr)
+            return {"ok": False, "message": hint or result.stderr.strip()}
+        return {"ok": True, "message": result.stdout.strip()}
+
+    window = find_window_by_title_re(spec.title_re)
+    if window is None:
+        return {"ok": False, "message": "window not found"}
+    try:
+        window.minimize()
+    except Exception as exc:
+        return {"ok": False, "message": f"{type(exc).__name__}: {exc}"}
+    return {"ok": True, "message": "minimized"}
+
+
 def app_status(spec: DesktopAppSpec) -> DesktopAppStatus:
     dependency_ok, dependency_error = automation_dependency_status()
     running = process_is_running(spec.process_names, mac_process_name=spec.mac_process_name)
@@ -792,6 +875,16 @@ def build_parser(
         help="Print WeCom / WhatsApp window availability as JSON and exit. Touches no workbook.",
     )
     parser.add_argument(
+        "--prepare-app",
+        choices=("wecom", "whatsapp"),
+        help="Bring the app's window up (launching it if needed), print status JSON, and exit.",
+    )
+    parser.add_argument(
+        "--minimize-app",
+        choices=("wecom", "whatsapp"),
+        help="Minimize the app's windows, print result JSON, and exit.",
+    )
+    parser.add_argument(
         "--debug-window-titles",
         action="store_true",
         help="Print app window titles that match the selected channel without pasting.",
@@ -1334,6 +1427,48 @@ def main(
             for key, status in ((k, app_status(spec)) for k, spec in specs.items())
         }
         print(json.dumps(report, ensure_ascii=False))
+        return
+
+    if args.prepare_app:
+        # Bring the window up so a bulk run can start against an app that sits in
+        # the background with its window closed.
+        specs = build_app_specs(
+            wecom_title_re=args.wecom_title_re,
+            whatsapp_title_re=args.whatsapp_title_re,
+        )
+        spec = specs[args.prepare_app]
+        status = app_status(spec)
+        launched = False
+        if status.dependency_ok and not status.window_found and not status.permission_error:
+            launched = launch_app(spec, configured_exe_for_app(args, spec.key))
+            for _ in range(10):
+                time.sleep(1.5)
+                status = app_status(spec)
+                if status.window_found or status.permission_error:
+                    break
+        if status.window_found:
+            # The window may exist but be sitting in the Dock (e.g. minimized by the
+            # previous batch); AX-level presence does not mean it can take keystrokes.
+            unminimize_app_window(spec)
+        print(
+            json.dumps(
+                {
+                    "window_found": status.window_found,
+                    "launched": launched,
+                    "message": status.message,
+                    "permission_error": status.permission_error,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return
+
+    if args.minimize_app:
+        specs = build_app_specs(
+            wecom_title_re=args.wecom_title_re,
+            whatsapp_title_re=args.whatsapp_title_re,
+        )
+        print(json.dumps(minimize_app_window(specs[args.minimize_app]), ensure_ascii=False))
         return
 
     args.attachments = normalized_attachment_paths(args.attachment)

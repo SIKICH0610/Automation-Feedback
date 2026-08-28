@@ -98,6 +98,19 @@ function run() {
 }
 """
 
+_JXA_UNMINIMIZE = """
+function run() {
+  const se = Application("System Events");
+  const procs = se.processes.whose({name: "%(process)s"});
+  if (procs.length === 0) return "no-process";
+  const wins = procs[0].windows();
+  for (let i = 0; i < wins.length; i++) {
+    try { wins[i].attributes["AXMinimized"].value = false; } catch (e) {}
+  }
+  return "ok";
+}
+"""
+
 _JXA_HAS_WINDOW = """
 function run() {
   const se = Application("System Events");
@@ -189,6 +202,13 @@ class WeComPasteRobotMac:
     def focus_window(self) -> None:
         _run_osascript(["-e", f'tell application "{self.process_name}" to activate'])
         time.sleep(0.3)
+        # activate does not restore a minimized window (AXMinimized stays true), so a
+        # batch that tidied WeCom into the Dock would otherwise leave the next run
+        # typing into nothing.
+        try:
+            _run_jxa(_JXA_UNMINIMIZE % {"process": self.process_name})
+        except WeComAutomationError:
+            pass
         script = _JXA_HAS_WINDOW % {"process": self.process_name}
         if _run_jxa(script) != "true":
             raise WeComAutomationError(f"{self.process_name} window was not found.")
