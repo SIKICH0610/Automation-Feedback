@@ -34,15 +34,32 @@ from quiz_bank_store import QuizBankStoreError
 
 PROJECT_DIR = Path(__file__).resolve().parent
 STATIC_DIR = PROJECT_DIR / "frontend"
-DEFAULT_ANNOUNCEMENT_DIR = PROJECT_DIR / "announcements"
+
+
+def _user_data_root() -> Path:
+    """Where the database and teacher files live.
+
+    From source this is the project folder, same as always. A frozen build must
+    not write into itself -- the .app is signed and read-only -- so its data goes
+    to the platform's per-user application-data directory instead.
+    """
+    if not getattr(sys, "frozen", False):
+        return PROJECT_DIR
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Teacher Feedback Desk"
+    return Path(os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming")) / "Teacher Feedback Desk"
+
+
+DATA_ROOT = _user_data_root()
+DEFAULT_ANNOUNCEMENT_DIR = DATA_ROOT / "announcements"
 MAX_REQUEST_BYTES = 8 * 1024 * 1024
 MAX_IMPORT_BYTES = 25 * 1024 * 1024
 ACTION_TIMEOUT_SECONDS = 30 * 60
 APP_PROBE_TIMEOUT_SECONDS = 60
 
-DEFAULT_APP_DATA_DIR = PROJECT_DIR / "app_data"
+DEFAULT_APP_DATA_DIR = DATA_ROOT / "app_data"
 DEFAULT_DATABASE = DEFAULT_APP_DATA_DIR / "feedback.db"
-DEFAULT_EXPORT_DIR = PROJECT_DIR / "exports"
+DEFAULT_EXPORT_DIR = DATA_ROOT / "exports"
 
 FrontendError = StoreError
 WorkbookStore = SQLiteFeedbackStore

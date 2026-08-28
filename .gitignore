@@ -15,3 +15,8 @@ announcements/
 
 # macOS Finder metadata
 .DS_Store
+
+# PyInstaller build output
+build/
+dist/
+*.spec.bak
