@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -62,6 +63,37 @@ class ImportEnrollmentHeaderTest(unittest.TestCase):
         self.assertEqual(groups["456"]["name"], "Geo B")
         # 上课时间 matched through its alias and came through intact.
         self.assertEqual(groups["456"]["weekly_time"], "周六 10:00")
+
+    def test_strict_ooxml_file_still_imports(self) -> None:
+        # The platform exports Strict OOXML (purl.oclc.org namespaces), which
+        # openpyxl silently loads as zero worksheets. Synthesize one by rewriting
+        # a normal file's namespaces to the strict form.
+        def build(workbook):
+            sheet = workbook.active
+            sheet.append(
+                ["classId", "className", "classTimeDescription", "subject",
+                 "firstName", "lastName", "学员id", "payStatus", "是否入班"]
+            )
+            sheet.append(["77", "Geo S", "Sun 09:00", "Math", "Zoe", "Xu", "888", "Paid", "是"])
+
+        normal = write_workbook(build)
+        strict = normal.with_name("strict.xlsx")
+        with zipfile.ZipFile(normal) as source, zipfile.ZipFile(strict, "w") as target:
+            for item in source.infolist():
+                data = source.read(item.filename)
+                if item.filename.endswith((".xml", ".rels")):
+                    data = data.replace(
+                        b"http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+                        b"http://purl.oclc.org/ooxml/spreadsheetml/main",
+                    ).replace(
+                        b"http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+                        b"http://purl.oclc.org/ooxml/officeDocument/relationships",
+                    )
+                target.writestr(item, data)
+
+        groups = group_by_class(read_enrollment_rows(strict), class_ids=None)
+        self.assertEqual(list(groups), ["77"])
+        self.assertEqual(groups["77"]["students"][0]["uid"], "888")
 
     def test_missing_class_time_fails_loudly(self) -> None:
         def build(workbook):

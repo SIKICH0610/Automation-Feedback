@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import io
+import warnings
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -90,8 +93,52 @@ def normalize_id(value: Any) -> str:
     return str(value).strip()
 
 
+# Strict OOXML uses these namespace roots instead of the transitional ones.
+# openpyxl silently loads such a file as zero worksheets; the platform's exporter
+# produces exactly that ("conformance=strict", purl.oclc.org namespaces).
+_STRICT_TO_TRANSITIONAL = (
+    (
+        b"http://purl.oclc.org/ooxml/spreadsheetml/main",
+        b"http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+    ),
+    (
+        b"http://purl.oclc.org/ooxml/officeDocument/relationships",
+        b"http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+    ),
+)
+
+
+def _load_workbook_lenient(xlsx_path: Path):
+    """load_workbook, plus a fallback for Strict OOXML files.
+
+    The two dialects are structurally identical for our purposes; rewriting the
+    namespace URIs to the transitional ones is enough for openpyxl to read the
+    data. Only attempted when the normal load comes back with no worksheets, so
+    ordinary files pay nothing.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        workbook = load_workbook(xlsx_path, data_only=True)
+        if workbook.worksheets:
+            return workbook
+        workbook.close()
+
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(xlsx_path) as source, zipfile.ZipFile(
+            buffer, "w", zipfile.ZIP_DEFLATED
+        ) as target:
+            for item in source.infolist():
+                data = source.read(item.filename)
+                if item.filename.endswith((".xml", ".rels")):
+                    for strict, transitional in _STRICT_TO_TRANSITIONAL:
+                        data = data.replace(strict, transitional)
+                target.writestr(item, data)
+        buffer.seek(0)
+        return load_workbook(buffer, data_only=True)
+
+
 def read_enrollment_rows(xlsx_path: Path) -> list[dict[str, Any]]:
-    workbook = load_workbook(xlsx_path, data_only=True)
+    workbook = _load_workbook_lenient(xlsx_path)
     try:
         best: tuple[int, Any, int, dict[str, int], dict[str, int]] | None = None
         for worksheet in workbook.worksheets:
