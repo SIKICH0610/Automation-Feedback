@@ -1428,3 +1428,7 @@ textarea.cell-input.is-expanded {
   text-decoration: underline dotted var(--line-strong);
   text-underline-offset: 4px;
 }
+
+#closing-block {
+  margin-top: 22px;
+}
