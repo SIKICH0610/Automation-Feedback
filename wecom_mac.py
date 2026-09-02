@@ -59,6 +59,9 @@ def launch_app(app_name: str = DEFAULT_PROCESS_NAME) -> bool:
 # way a person using the app would -- the dialog closing on its own is not proof it
 # worked, so this always gets verified afterward by checking the sidebar's own
 # AXSelected row (see verify_chat).
+# The wait for results is a poll, not a fixed delay: a fast machine continues the
+# moment the results dialog appears (typically ~0.4s), while a slow machine gets up
+# to 2.5s -- longer than the old fixed 1.5s -- before "no results" is concluded.
 _JXA_SEARCH_AND_OPEN_TOP_RESULT = """
 function run() {
   const se = Application("System Events");
@@ -70,16 +73,24 @@ function run() {
   se.keystroke(String.fromCharCode(8));
   delay(0.2);
   se.keystroke("v", {using: "command down"});
-  delay(1.5);
 
-  const dialogsBefore = proc.windows.whose({subrole: "AXDialog"});
-  if (dialogsBefore.length === 0) {
+  let waited = 0;
+  while (waited < 2.5) {
+    if (proc.windows.whose({subrole: "AXDialog"}).length > 0) break;
+    delay(0.1);
+    waited += 0.1;
+  }
+  if (proc.windows.whose({subrole: "AXDialog"}).length === 0) {
     se.keyCode(53); // Escape, in case the search box is left open with no results
     return JSON.stringify({ok: false, reason: "no_search_results"});
   }
+  // The dialog pops before the real results are in it (it opens with the echo
+  // suggestion row first). Pressing Return on that opens nothing, so the poll
+  // only shaves the wait-for-dialog part; results still get a fixed settle.
+  delay(0.8);
 
   se.keyCode(36); // Return: open WeCom's own top search result
-  delay(0.7);
+  delay(0.2);
   return JSON.stringify({ok: true});
 }
 """
@@ -195,7 +206,7 @@ class WeComPasteRobotMac:
     implementation's pixel-based dropdown-height heuristic.
     """
 
-    def __init__(self, *, process_name: str = DEFAULT_PROCESS_NAME, settle_seconds: float = 0.8) -> None:
+    def __init__(self, *, process_name: str = DEFAULT_PROCESS_NAME, settle_seconds: float = 0.4) -> None:
         self.process_name = process_name
         self.settle_seconds = settle_seconds
 
@@ -221,8 +232,17 @@ class WeComPasteRobotMac:
         except WeComAutomationError:
             pass
 
+    def refocus(self) -> None:
+        """Cheap per-row focus: activate only, no sleeps, no unminimize.
+
+        The full focus_window runs once per batch. This one exists so keystrokes
+        cannot land in another app if the person switches away mid-batch --
+        activate is a no-op when WeCom is already frontmost, and the search
+        script's own leading delay covers activation latency.
+        """
+        _run_osascript(["-e", f'tell application "{self.process_name}" to activate'])
+
     def search_and_open_top_result(self, search_key: str) -> None:
-        self.focus_window()
         pyperclip.copy(search_key)
         script = _JXA_SEARCH_AND_OPEN_TOP_RESULT % {"process": self.process_name}
         result = json.loads(_run_jxa(script))
@@ -234,7 +254,29 @@ class WeComPasteRobotMac:
         result = json.loads(_run_jxa(script))
         return result.get("texts", [])
 
-    def verify_chat(self, *, uid: str, name_parts: list[str], expected_chat_name: str) -> tuple[bool, str]:
+    def verify_chat(
+        self,
+        *,
+        uid: str,
+        name_parts: list[str],
+        expected_chat_name: str,
+        timeout: float = 2.5,
+    ) -> tuple[bool, str]:
+        """Poll the sidebar until the opened chat matches or the timeout passes.
+
+        Polling replaces the old fixed post-Enter delay: a fast machine verifies on
+        the first read, a slow one gets more total time than it ever did before.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            verified, reason = self._verify_chat_once(
+                uid=uid, name_parts=name_parts, expected_chat_name=expected_chat_name
+            )
+            if verified or time.monotonic() >= deadline:
+                return verified, reason
+            time.sleep(0.2)
+
+    def _verify_chat_once(self, *, uid: str, name_parts: list[str], expected_chat_name: str) -> tuple[bool, str]:
         texts = self.selected_sidebar_row_texts()
         if not texts:
             return False, "no_chat_selected_in_sidebar"

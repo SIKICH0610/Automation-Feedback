@@ -153,8 +153,9 @@ The two desktop actions take care of WeCom themselves: its window is brought up 
 restored from the Dock) before the batch starts, and minimized again when the batch
 finishes, so WeCom can just sit in the background between runs. WhatsApp is still
 checked up front and must already be open — the batch stops immediately with a clear
-message if a needed app is unavailable, and never opens anything mid-batch. Budget
-roughly three seconds per student.
+message if a needed app is unavailable, and never opens anything mid-batch. Waits are adaptive: fast machines move on as soon as WeCom's UI confirms each step,
+slow machines get longer caps than the old fixed delays — budget two to four seconds
+per student depending on the machine.
 
 ## Managing the roster
 

@@ -1049,14 +1049,26 @@ def ensure_desktop_ready_once(
     _desktop_ready_cache.add(app_spec.key)
 
 
+# The full focus_window (activate + unminimize + window check) runs once per
+# process; every following row does only a cheap window-presence check. Nothing in
+# a batch defocuses WeCom between rows, and if someone closes it mid-run the guard
+# fails loudly on the next row.
+_wecom_mac_focused = False
+
+
 def _run_wecom_job_mac(job: PasteJob, *, args: argparse.Namespace) -> JobResult:
+    global _wecom_mac_focused
     from wecom_mac import WeComAutomationError, WeComPasteRobotMac
 
     robot = WeComPasteRobotMac()
     name_parts = [part for part in job.student_name.split() if part]
 
     try:
-        robot.focus_window()
+        if _wecom_mac_focused:
+            robot.refocus()
+        else:
+            robot.focus_window()
+            _wecom_mac_focused = True
     except WeComAutomationError as exc:
         # A TCC refusal reads like an automation failure; point at the actual
         # setting instead of at WeCom.
@@ -1076,7 +1088,9 @@ def _run_wecom_job_mac(job: PasteJob, *, args: argparse.Namespace) -> JobResult:
     print(f"Verification: {reason}")
 
     if job.action == "check-group-chat":
-        robot.clear_search_state()
+        # No clear between rows: the next search Cmd+A-selects and overwrites the
+        # old key anyway, and skipping the extra round-trip saves over a second
+        # per student.
         status = "verified" if verified else "not_found"
         print(f"Group chat check: {status}")
         return JobResult(status=status)
@@ -1091,8 +1105,6 @@ def _run_wecom_job_mac(job: PasteJob, *, args: argparse.Namespace) -> JobResult:
         robot.paste_feedback(job.feedback)
     if args.attachments:
         print("Attachment paste is not yet supported on macOS; skipping attachments for this row.")
-    robot.clear_search_state()
-    print("Cleared WeCom search box for the next row.")
     return JobResult(status="pasted", pasted=True)
 
 
