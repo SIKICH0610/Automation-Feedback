@@ -35,11 +35,14 @@ FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "In group": ("ingroup", "是否入群"),
 }
 
-# Without these the file cannot be imported at all. classTimeDescription, subject,
-# and In group are cosmetic: when missing they come back empty instead of failing.
+# Without these the file cannot be imported at all. The class time is required on
+# purpose: it distinguishes same-named classes and teachers rely on it, so a file
+# that lost it should fail loudly rather than import silently without times.
+# subject and In group are cosmetic: when missing they come back empty.
 REQUIRED_FIELDS = (
     "classId",
     "className",
+    "classTimeDescription",
     "firstName",
     "lastName",
     "学员id",

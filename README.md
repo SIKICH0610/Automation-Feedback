@@ -161,7 +161,7 @@ roughly three seconds per student.
 ### Import a semester's enrollment
 
 The **Import Students** tab reads a platform enrollment export (`classId`, `className`,
-`firstName`/`lastName`, `学员id`, `payStatus`, `是否入班`). The reader is deliberately
+`classTimeDescription`, `firstName`/`lastName`, `学员id`, `payStatus`, `是否入班`). The reader is deliberately
 forgiving about the file's shape: columns are matched by name (with common renames and
 case/spacing differences accepted), extra columns and reordering are ignored, the header
 row is located by content even under a banner row, and instruction sheets before the

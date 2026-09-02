@@ -44,13 +44,13 @@ class ImportEnrollmentHeaderTest(unittest.TestCase):
             sheet.append([])                          # blank row
             sheet.append(                             # header row 3: renamed, reordered, extras
                 ["Pay Status", "Student_ID", "微信号", "Last Name", "First Name",
-                 "Class ID", "班级名称", "新增列", "是否入班"]
+                 "Class ID", "班级名称", "上课时间", "新增列", "是否入班"]
             )
-            sheet.append(["Paid", "222", "wx1", "Lin", "Bob", "456", "Geo B", "x", "是"])
-            sheet.append(["paid", "333", "wx2", "Chen", "Cara", "456", "Geo B", "x", "是"])
-            sheet.append(["Unpaid", "444", "wx3", "Wu", "Dan", "456", "Geo B", "x", "是"])
-            sheet.append(["Paid", "555", "wx4", "Hu", "Eve", "456", "Geo B", "x", "否"])
-            sheet.append(["Paid", "666", "wx5", "Li", "", "456", "Geo B", "x", "是"])
+            sheet.append(["Paid", "222", "wx1", "Lin", "Bob", "456", "Geo B", "周六 10:00", "x", "是"])
+            sheet.append(["paid", "333", "wx2", "Chen", "Cara", "456", "Geo B", "周六 10:00", "x", "是"])
+            sheet.append(["Unpaid", "444", "wx3", "Wu", "Dan", "456", "Geo B", "周六 10:00", "x", "是"])
+            sheet.append(["Paid", "555", "wx4", "Hu", "Eve", "456", "Geo B", "周六 10:00", "x", "否"])
+            sheet.append(["Paid", "666", "wx5", "Li", "", "456", "Geo B", "周六 10:00", "x", "是"])
 
         rows = read_enrollment_rows(write_workbook(build))
         groups = group_by_class(rows, class_ids=None)
@@ -60,8 +60,18 @@ class ImportEnrollmentHeaderTest(unittest.TestCase):
         # blank-first-name row are filtered out.
         self.assertEqual(uids, ["222", "333"])
         self.assertEqual(groups["456"]["name"], "Geo B")
-        # Cosmetic columns are optional now: missing ones come back empty.
-        self.assertEqual(groups["456"]["weekly_time"], "")
+        # 上课时间 matched through its alias and came through intact.
+        self.assertEqual(groups["456"]["weekly_time"], "周六 10:00")
+
+    def test_missing_class_time_fails_loudly(self) -> None:
+        def build(workbook):
+            sheet = workbook.active
+            sheet.append(["classId", "className", "firstName", "lastName", "学员id", "payStatus", "是否入班"])
+            sheet.append(["1", "C", "A", "B", "9", "Paid", "是"])
+
+        with self.assertRaises(ValueError) as caught:
+            read_enrollment_rows(write_workbook(build))
+        self.assertIn("classTimeDescription", str(caught.exception))
 
     def test_missing_required_column_error_lists_what_was_seen(self) -> None:
         def build(workbook):
