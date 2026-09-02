@@ -667,6 +667,9 @@ textarea.cell-input.is-expanded {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  /* Every subtitle keeps clear air above its content; the Save button used to
+     sit right on top of the textarea below it. */
+  margin-bottom: 12px;
 }
 
 .announcement-section textarea {
