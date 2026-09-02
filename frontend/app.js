@@ -12,11 +12,11 @@ const state = {
   searchResults: [],
   searchRequest: 0,
   searchTimer: null,
-  quizNumber: "1",
+  contentMode: "general",
   dirty: false,
   announcementDirty: false,
   recapDirty: false,
-  quizRecaps: { "1": "", "2": "" },
+  recaps: { general: "", "1": "", "2": "" },
   quizRecapDirty: false,
   attachments: [],
   selectedAttachments: new Set(),
@@ -120,6 +120,9 @@ function toast(message, error = false) {
 function setLog(text) {
   elements.activityLog.textContent = text || "Ready.";
   elements.activityLog.scrollTop = elements.activityLog.scrollHeight;
+  const lines = String(text || "Ready.").trim().split("\n");
+  const last = lines[lines.length - 1] || "Ready.";
+  elements.logLast.textContent = last.length > 46 ? `${last.slice(0, 46)}…` : last;
 }
 
 function formatFileSize(bytes) {
@@ -915,31 +918,94 @@ function renderSelection() {
   elements.rowCount.textContent = `${total} student${total === 1 ? "" : "s"}`;
 }
 
-function renderQuizTarget() {
-  elements.quizGenerateTarget.textContent = `Writes to Quiz${state.quizNumber} Feedback`;
-  elements.quizPasteTarget.textContent = `Uses Quiz${state.quizNumber} Feedback`;
-  document.querySelectorAll(".segment").forEach((button) => {
-    button.classList.toggle("is-active", button.dataset.quiz === state.quizNumber);
-  });
-  elements.quizRecapLabel.textContent = `Quiz ${state.quizNumber} recap 本次 quiz 回顾`;
-  elements.quizRecapText.value = state.quizRecaps[state.quizNumber] || "";
+// One recap box + one Generate/Paste pair, re-pointed by the content mode. The
+// three recap texts stay separate records; the mode only decides which one the
+// box is editing and which columns the actions target.
+const MODE_META = {
+  general: {
+    title: "Lesson recap 本节课内容回顾",
+    column: "Feedback",
+    view: "general",
+    placeholder: "本节课内容回顾，例如：今天的课程主要围绕三角形全等的判定、勾股定理的应用展开",
+    hint: "Used verbatim after the greeting: comments open “家长您好～” followed by exactly what you write here. Left empty, a generic recap sentence fills in.",
+    generate: "generate-comments",
+    paste: "paste-comments",
+  },
+  quiz1: {
+    title: "Quiz 1 recap 本次 quiz 回顾",
+    column: "Quiz1 Feedback",
+    view: "quiz1",
+    placeholder: "本次 quiz 的范围和整体情况，例如：满分 8 分，7 道选择 + 1 道证明，班级平均 6.9/8",
+    hint: "Used as paragraph 1 of this quiz's feedback. Each quiz keeps its own recap.",
+    generate: "generate-quiz-feedback",
+    paste: "paste-quiz-feedback",
+  },
+  quiz2: {
+    title: "Quiz 2 recap 本次 quiz 回顾",
+    column: "Quiz2 Feedback",
+    view: "quiz2",
+    placeholder: "本次 quiz 的范围和整体情况，例如：4 道题 + 1 道 bonus，班级平均 6.4/9",
+    hint: "Used as paragraph 1 of this quiz's feedback. Each quiz keeps its own recap.",
+    generate: "generate-quiz-feedback",
+    paste: "paste-quiz-feedback",
+  },
+};
+
+function recapKey(mode = state.contentMode) {
+  return mode === "general" ? "general" : mode === "quiz1" ? "1" : "2";
 }
 
-// Switching quizzes swaps which recap the one box is editing, so whatever is on
-// screen has to be banked against the quiz it was typed for first.
-async function switchQuizNumber(quizNumber) {
-  if (quizNumber === state.quizNumber) return;
-  state.quizRecaps[state.quizNumber] = elements.quizRecapText.value;
-  if (state.quizRecapDirty) {
-    try {
+function modeQuizNumber() {
+  return state.contentMode === "quiz2" ? "2" : "1";
+}
+
+function renderMode() {
+  const meta = MODE_META[state.contentMode];
+  document.querySelectorAll(".mode-switch .segment").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.mode === state.contentMode);
+  });
+  elements.recapTitle.textContent = meta.title;
+  elements.recapText.placeholder = meta.placeholder;
+  elements.recapHint.textContent = meta.hint;
+  elements.recapText.value = state.recaps[recapKey()] || "";
+  elements.generateTarget.textContent = `Writes to ${meta.column}`;
+  elements.pasteTarget.textContent = `Uses ${meta.column}`;
+}
+
+// Switching modes swaps which recap the one box edits: bank the on-screen text
+// first, quietly saving it if it was dirty.
+async function switchContentMode(mode) {
+  if (mode === state.contentMode || !MODE_META[mode]) return;
+  state.recaps[recapKey()] = elements.recapText.value;
+  try {
+    if (state.contentMode === "general" && state.recapDirty) {
+      await saveLessonRecap({ quiet: true });
+    } else if (state.contentMode !== "general" && state.quizRecapDirty) {
       await saveQuizRecap({ quiet: true });
-    } catch (error) {
-      toast(error.message, true);
-      return;
     }
+  } catch (error) {
+    toast(error.message, true);
+    return;
   }
-  state.quizNumber = quizNumber;
-  renderQuizTarget();
+  state.contentMode = mode;
+  renderMode();
+  // The table follows the mode, so what Generate writes is what the teacher sees.
+  const view = MODE_META[mode].view;
+  if (state.columnView !== view) {
+    state.columnView = view;
+    elements.columnView.value = view;
+    renderTable();
+  }
+}
+
+function switchRailTab(name) {
+  document.querySelectorAll(".rail-tab").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.rail === name);
+  });
+  for (const panel of ["feedback", "announce", "bulk"]) {
+    const node = byId(`rail-${panel}`);
+    if (node) node.hidden = panel !== name;
+  }
 }
 
 function applySheetData(data, preserve = null) {
@@ -968,11 +1034,14 @@ function applySheetData(data, preserve = null) {
   elements.announcementText.value = data.announcement || "";
   elements.announcementPath.textContent = data.announcement_path || "";
   elements.announcementPath.title = data.announcement_path || "";
-  elements.recapText.value = data.lesson_recap || "";
+  state.recaps = {
+    general: data.lesson_recap || "",
+    "1": (data.quiz_recaps || {})["1"] || "",
+    "2": (data.quiz_recaps || {})["2"] || "",
+  };
   state.recapDirty = false;
-  state.quizRecaps = { "1": "", "2": "", ...(data.quiz_recaps || {}) };
   state.quizRecapDirty = false;
-  renderQuizTarget();
+  renderMode();
   state.attachments = data.attachments || [];
   state.selectedAttachments = new Set(state.attachments.map((attachment) => attachment.id));
   state.dirty = false;
@@ -1044,13 +1113,13 @@ async function saveLessonRecap({ quiet = false } = {}) {
 
 async function saveQuizRecap({ quiet = false } = {}) {
   if (!state.quizRecapDirty && quiet) return;
-  const quizNumber = state.quizNumber;
-  const text = elements.quizRecapText.value;
+  const quizNumber = modeQuizNumber();
+  const text = state.contentMode === "general" ? state.recaps[quizNumber] || "" : elements.recapText.value;
   await api("/api/quiz-recap/save", {
     method: "POST",
     body: JSON.stringify({ sheet: state.sheetName, quiz_number: quizNumber, text }),
   });
-  state.quizRecaps[quizNumber] = text;
+  state.recaps[quizNumber] = text;
   state.quizRecapDirty = false;
   if (!quiet) toast(`Quiz ${quizNumber} recap saved.`);
 }
@@ -1228,7 +1297,7 @@ async function runAction(action) {
       action,
       sheet: state.sheetName,
       rows,
-      quiz_number: state.quizNumber,
+      quiz_number: modeQuizNumber(),
       attachment_ids: attachmentIds,
       channel: state.checkChannel,
     });
@@ -1336,8 +1405,9 @@ function bindEvents() {
   elements.announcementText.addEventListener("input", () => markDirty("announcement"));
   elements.saveRecap.addEventListener("click", async () => {
     try {
-      setBusy(true, "Saving lesson recap", state.sheetName);
-      await saveLessonRecap();
+      setBusy(true, "Saving recap", state.sheetName);
+      if (state.contentMode === "general") await saveLessonRecap();
+      else await saveQuizRecap();
       if (!state.dirty) setSaveState("Saved", "saved");
     } catch (error) {
       toast(error.message, true);
@@ -1345,28 +1415,39 @@ function bindEvents() {
       setBusy(false);
     }
   });
-  elements.recapText.addEventListener("input", () => markDirty("recap"));
-  elements.quizRecapText.addEventListener("input", () => markDirty("quizRecap"));
-  elements.saveQuizRecap.addEventListener("click", async () => {
-    try {
-      setBusy(true, "Saving quiz recap", `Quiz ${state.quizNumber}`);
-      await saveQuizRecap();
-      if (!state.dirty) setSaveState("Saved", "saved");
-    } catch (error) {
-      toast(error.message, true);
-    } finally {
-      setBusy(false);
-    }
-  });
+  elements.recapText.addEventListener("input", () =>
+    markDirty(state.contentMode === "general" ? "recap" : "quizRecap")
+  );
   elements.addAttachment.addEventListener("click", () => elements.attachmentInput.click());
   elements.attachmentInput.addEventListener("change", () => uploadAttachments(elements.attachmentInput.files));
-  document.querySelectorAll(".segment").forEach((button) => {
-    button.addEventListener("click", () => {
-      switchQuizNumber(button.dataset.quiz);
-    });
+  document.querySelectorAll(".mode-switch .segment").forEach((button) => {
+    button.addEventListener("click", () => switchContentMode(button.dataset.mode));
   });
+  document.querySelectorAll(".rail-tab").forEach((button) => {
+    button.addEventListener("click", () => switchRailTab(button.dataset.rail));
+  });
+  elements.actionGenerate.addEventListener("click", () =>
+    runAction(MODE_META[state.contentMode].generate)
+  );
+  elements.actionPaste.addEventListener("click", () =>
+    runAction(MODE_META[state.contentMode].paste)
+  );
   document.querySelectorAll("[data-action]").forEach((button) => {
     button.addEventListener("click", () => runAction(button.dataset.action));
+  });
+  elements.logToggle.addEventListener("click", () => {
+    const open = elements.logBody.hidden;
+    elements.logBody.hidden = !open;
+    elements.logCaret.textContent = open ? "▾" : "▸";
+  });
+  elements.toolbarMore.addEventListener("click", (event) => {
+    event.stopPropagation();
+    elements.toolbarMenu.hidden = !elements.toolbarMenu.hidden;
+  });
+  document.addEventListener("click", (event) => {
+    if (!elements.toolbarMenu.hidden && !elements.toolbarMenu.contains(event.target)) {
+      elements.toolbarMenu.hidden = true;
+    }
   });
   elements.clearLog.addEventListener("click", () => setLog("Ready."));
   document.addEventListener("keydown", (event) => {
@@ -1430,11 +1511,18 @@ async function initialize() {
     "attachmentSummary",
     "attachmentList",
     "attachmentEmpty",
-    "quizGenerateTarget",
-    "quizRecapLabel",
-    "quizRecapText",
-    "saveQuizRecap",
-    "quizPasteTarget",
+    "recapTitle",
+    "recapHint",
+    "generateTarget",
+    "pasteTarget",
+    "actionGenerate",
+    "actionPaste",
+    "logToggle",
+    "logCaret",
+    "logLast",
+    "logBody",
+    "toolbarMore",
+    "toolbarMenu",
     "activityLog",
     "clearLog",
     "busyOverlay",
@@ -1454,7 +1542,8 @@ async function initialize() {
     elements.databasePath.textContent = bootstrap.database;
     elements.databasePath.title = bootstrap.database;
     renderTabs();
-    renderQuizTarget();
+    renderMode();
+    setLog("Ready.");
     renderChannelChoice();
     if (!bootstrap.default_sheet) throw new Error("The database has no class sheets.");
     await loadSheet(bootstrap.default_sheet);

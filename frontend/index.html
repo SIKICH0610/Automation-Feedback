@@ -68,10 +68,15 @@
                 <div id="search-results" class="search-results" role="listbox" aria-label="Student search results" hidden></div>
               </div>
               <button id="add-row" class="button secondary" type="button">+ Add student</button>
-              <button id="export-excel" class="button secondary" type="button">Export Excel</button>
-              <button id="export-report" class="button secondary" type="button">Export Report</button>
               <button id="save-sheet" class="button primary" type="button">Save sheet</button>
-              <button id="delete-class" class="button danger" type="button">Delete class</button>
+              <div class="overflow-wrap">
+                <button id="toolbar-more" class="button secondary" type="button" aria-haspopup="true">⋯</button>
+                <div id="toolbar-menu" class="overflow-menu" hidden>
+                  <button id="export-excel" class="overflow-item" type="button">Export Excel</button>
+                  <button id="export-report" class="overflow-item" type="button">Export Report</button>
+                  <button id="delete-class" class="overflow-item is-danger" type="button">Delete class</button>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -94,7 +99,18 @@
         </section>
 
         <aside class="control-rail">
-          <section class="side-section recap-section" aria-labelledby="recap-title">
+          <nav class="rail-tabs" aria-label="Panel">
+            <button class="rail-tab is-active" data-rail="feedback" type="button">反馈 Feedback</button>
+            <button class="rail-tab" data-rail="announce" type="button">通知 Announce</button>
+            <button class="rail-tab" data-rail="bulk" type="button">批量 Bulk</button>
+          </nav>
+
+          <section id="rail-feedback" class="rail-panel side-section" aria-label="Feedback">
+            <div class="segmented-control mode-switch" aria-label="Content mode">
+              <button class="segment is-active" data-mode="general" type="button">课堂反馈</button>
+              <button class="segment" data-mode="quiz1" type="button">Quiz 1</button>
+              <button class="segment" data-mode="quiz2" type="button">Quiz 2</button>
+            </div>
             <div class="section-heading">
               <div>
                 <p class="eyebrow">Used as paragraph 1</p>
@@ -102,14 +118,22 @@
               </div>
               <button id="save-recap" class="button secondary small" type="button">Save</button>
             </div>
-            <textarea id="recap-text" rows="4" placeholder="本节课内容回顾，例如：今天的课程主要围绕三角形全等的判定、勾股定理的应用展开"></textarea>
-            <p class="field-hint">
+            <textarea id="recap-text" rows="5" placeholder="本节课内容回顾，例如：今天的课程主要围绕三角形全等的判定、勾股定理的应用展开"></textarea>
+            <p class="field-hint" id="recap-hint">
               Used verbatim after the greeting: comments open “家长您好～” followed by
               exactly what you write here. Left empty, a generic recap sentence fills in.
             </p>
+            <button id="action-generate" class="action-button generate" type="button">
+              <span>Generate 生成</span>
+              <small id="generate-target">Writes to Feedback</small>
+            </button>
+            <button id="action-paste" class="action-button paste" type="button">
+              <span>Paste 粘贴</span>
+              <small id="paste-target">Uses Feedback</small>
+            </button>
           </section>
 
-          <section class="side-section announcement-section" aria-labelledby="announcement-title">
+          <section id="rail-announce" class="rail-panel side-section" aria-label="Announcement" hidden>
             <div class="section-heading">
               <div>
                 <p class="eyebrow">Linked content</p>
@@ -117,7 +141,7 @@
               </div>
               <button id="save-announcement" class="button secondary small" type="button">Save</button>
             </div>
-            <textarea id="announcement-text" rows="12" placeholder="Write the class announcement or course description here"></textarea>
+            <textarea id="announcement-text" rows="10" placeholder="Write the class announcement or course description here"></textarea>
             <p id="announcement-path" class="file-path"></p>
             <div class="attachment-toolbar">
               <div>
@@ -135,64 +159,13 @@
             </div>
             <div id="attachment-list" class="attachment-list"></div>
             <p id="attachment-empty" class="attachment-empty">No files uploaded for this class.</p>
+            <button class="action-button paste" data-action="paste-announcement" type="button">
+              <span>Paste announcement</span>
+              <small>Shared text and selected files</small>
+            </button>
           </section>
 
-          <section class="side-section action-section" aria-labelledby="actions-title">
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">Selected students</p>
-                <h2 id="actions-title">Actions</h2>
-              </div>
-            </div>
-
-            <div class="action-group">
-              <p class="group-label">General</p>
-              <button class="action-button generate" data-action="generate-comments" type="button">
-                <span>Generate comments</span>
-                <small>Writes to Feedback</small>
-              </button>
-              <button class="action-button paste" data-action="paste-announcement" type="button">
-                <span>Paste announcement</span>
-                <small>Shared text and selected files</small>
-              </button>
-              <button class="action-button paste" data-action="paste-comments" type="button">
-                <span>Paste comments</span>
-                <small>Student-specific text</small>
-              </button>
-              <button class="action-button paste" data-action="check-group-chat" type="button">
-                <span>Check group chat status</span>
-                <small>Updates Group Chat column</small>
-              </button>
-            </div>
-
-            <div class="action-group">
-              <div class="quiz-heading">
-                <p class="group-label">Quiz</p>
-                <div class="segmented-control" aria-label="Quiz number">
-                  <button class="segment is-active" data-quiz="1" type="button">Quiz 1</button>
-                  <button class="segment" data-quiz="2" type="button">Quiz 2</button>
-                </div>
-              </div>
-              <div class="quiz-recap-block">
-                <div class="quiz-recap-heading">
-                  <label id="quiz-recap-label" for="quiz-recap-text">Quiz 1 recap 本次 quiz 回顾</label>
-                  <button id="save-quiz-recap" class="button secondary small" type="button">Save</button>
-                </div>
-                <textarea id="quiz-recap-text" rows="4" placeholder="本次 quiz 的范围和整体情况，例如：满分 8 分，7 道选择 + 1 道证明，班级平均 6.9/8"></textarea>
-                <p class="field-hint">Used as paragraph 1 of this quiz's feedback. Each quiz keeps its own recap.</p>
-              </div>
-              <button class="action-button generate" data-action="generate-quiz-feedback" type="button">
-                <span>Generate quiz feedback</span>
-                <small id="quiz-generate-target">Writes to Quiz1 Feedback</small>
-              </button>
-              <button class="action-button paste" data-action="paste-quiz-feedback" type="button">
-                <span>Paste quiz feedback</span>
-                <small id="quiz-paste-target">Uses Quiz1 Feedback</small>
-              </button>
-            </div>
-          </section>
-
-          <section class="side-section bulk-section" aria-labelledby="bulk-title">
+          <section id="rail-bulk" class="rail-panel side-section" aria-label="Bulk" hidden>
             <div class="section-heading">
               <div>
                 <p class="eyebrow" id="bulk-scope">Whole semester</p>
@@ -228,16 +201,15 @@
             </button>
           </section>
 
-          <section class="side-section activity-section" aria-labelledby="activity-title">
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">Latest run</p>
-                <h2 id="activity-title">Activity</h2>
-              </div>
+          <div class="log-block">
+            <button id="log-toggle" class="text-button log-toggle" type="button">
+              <span id="log-caret">▸</span> Activity <span id="log-last" class="log-last"></span>
+            </button>
+            <div id="log-body" hidden>
+              <pre id="activity-log" aria-live="polite">Ready.</pre>
               <button id="clear-log" class="text-button" type="button">Clear</button>
             </div>
-            <pre id="activity-log" aria-live="polite">Ready.</pre>
-          </section>
+          </div>
         </aside>
       </main>
     </div>

@@ -415,30 +415,6 @@ textarea:focus,
   border-color: #aebbb6;
 }
 
-.quiz-recap-block {
-  margin: 4px 0 10px;
-}
-
-.quiz-recap-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 5px;
-}
-
-.quiz-recap-heading label {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.quiz-recap-block textarea {
-  width: 100%;
-  padding: 7px 9px;
-  resize: vertical;
-}
-
 .field-hint {
   margin: 6px 0 0;
   color: var(--muted);
@@ -1303,4 +1279,136 @@ textarea.cell-input.is-expanded {
 
 .busy-cancel {
   margin-top: 12px;
+}
+
+.rail-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 10px 12px 0;
+  background: var(--surface-muted);
+  border-bottom: 1px solid var(--line);
+}
+
+.rail-tab {
+  flex: 1 1 0;
+  min-height: 36px;
+  padding: 6px 4px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  border-radius: 6px 6px 0 0;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.rail-tab:hover {
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.rail-tab.is-active {
+  color: var(--teal-dark);
+  background: var(--surface);
+  border-bottom-color: var(--teal);
+}
+
+.mode-switch {
+  margin-bottom: 12px;
+}
+
+.mode-switch .segment {
+  flex: 1 1 0;
+  padding-right: 4px;
+  padding-left: 4px;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.rail-panel .action-button {
+  margin-top: 8px;
+}
+
+.log-block {
+  margin-top: auto;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--line);
+}
+
+.log-toggle {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  gap: 6px;
+  overflow: hidden;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.log-last {
+  overflow: hidden;
+  flex: 1 1 auto;
+  color: var(--muted);
+  font-weight: 500;
+  text-overflow: ellipsis;
+}
+
+.log-block pre {
+  max-height: 220px;
+  overflow: auto;
+  margin: 8px 0 4px;
+  padding: 8px;
+  background: var(--surface-muted);
+  border-radius: 6px;
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+
+.control-rail {
+  display: flex;
+  flex-direction: column;
+}
+
+.rail-panel {
+  overflow-y: auto;
+}
+
+.overflow-wrap {
+  position: relative;
+}
+
+.overflow-menu {
+  position: absolute;
+  z-index: 35;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 170px;
+  padding: 5px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.overflow-item {
+  display: block;
+  width: 100%;
+  padding: 9px 11px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  font-weight: 600;
+}
+
+.overflow-item:hover {
+  background: var(--teal-soft);
+}
+
+.overflow-item.is-danger {
+  color: var(--red);
+}
+
+.overflow-item.is-danger:hover {
+  background: var(--red-soft);
 }

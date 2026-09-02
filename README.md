@@ -69,8 +69,14 @@ It opens `http://127.0.0.1:8765` in the browser. Keep the terminal open while us
 
 ### Lesson recap → the opening paragraph
 
-The **Lesson recap 本节课内容回顾** box in the right-hand rail is what the generated
-comment opens with. Your wording is used verbatim — the only thing added is the
+The right-hand rail has three tabs — **反馈 Feedback** (the daily workflow), **通知
+Announce** (announcement + attachments), and **批量 Bulk** (whole-semester runs). The
+Feedback tab is driven by one content-mode switch: **课堂反馈 | Quiz 1 | Quiz 2**. A
+single recap box, one Generate button, and one Paste button all follow the mode, and
+the roster's column view switches with it, so what Generate writes is what you see.
+
+The recap box (in 课堂反馈 mode, the **Lesson recap 本节课内容回顾**) is what the
+generated comment opens with. Your wording is used verbatim — the only thing added is the
 greeting in front:
 
 > recap: `今天的课程主要围绕三角形全等的判定、勾股定理的应用展开`
@@ -97,9 +103,9 @@ Absent students are skipped. Fields marked `Not Observed` are left out.
 
 ### Quiz feedback
 
-Pick **Quiz 1** or **Quiz 2** in the Quiz block. Each quiz has **its own recap box**,
-which follows that selector, and is used as paragraph 1 of that quiz's message only —
-the two quizzes are written up and sent separately.
+Pick **Quiz 1** or **Quiz 2** with the content-mode switch. Each quiz keeps **its own
+recap** — the box swaps to it, and it is used as paragraph 1 of that quiz's message
+only — the two quizzes are written up and sent separately.
 
 **Generate quiz feedback** then writes into `Quiz1 Feedback` / `Quiz2 Feedback`, using
 only that quiz's score and average. The quiz you picked is passed through explicitly, so
@@ -129,8 +135,8 @@ are `pasted`, `needs_review`, `skipped_absent`, and `failed`.
 
 ### Check group chat status
 
-**Check group chat status** searches for each selected student's chat by `uid` and
-writes `TRUE`/`FALSE` into the `Group Chat` column. It never opens or pastes into a chat.
+**Check group chats** (on the 批量 Bulk tab) searches for each student's chat by `uid`
+and writes `TRUE`/`FALSE` into the `Group Chat` column. It never opens or pastes into a chat.
 Rows that could not be checked are reported as `needs_review` and left unchanged rather
 than guessed.
 
@@ -213,6 +219,7 @@ top-left dropdown, one class per sheet:
   是否发开课提醒, 是否发课后反馈, 第一节课反馈, 第一次quiz反馈, 第二次quiz反馈. For
   reporting, not for re-importing.
 
+Both exports, and **Delete class**, live under the toolbar's **⋯** menu.
 Editing a downloaded file does not change the database. Scripted callers can use
 `POST /api/export` or `POST /api/export/report` with an optional `{"semester": "..."}`
 body, which writes into `exports/` and returns the path instead of streaming a download.
