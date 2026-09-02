@@ -377,6 +377,9 @@ class SQLiteFeedbackStore:
             # message, since paragraph 1 is whatever recap the run was given.
             "quiz1_recap": "TEXT",
             "quiz2_recap": "TEXT",
+            # Optional hand-written paragraph 3 for generated comments. Empty means
+            # the default homework note + closing sentence.
+            "closing_note": "TEXT",
         }
         for column_name, definition in additions.items():
             if column_name not in existing:
@@ -862,6 +865,25 @@ class SQLiteFeedbackStore:
             )
         return cleaned
 
+    def read_closing_note(self, sheet_name: str) -> str:
+        with self.lock, self._connect() as connection:
+            class_row = self._class_row(connection, sheet_name)
+            row = connection.execute(
+                "SELECT closing_note FROM classes WHERE id = ?",
+                (int(class_row["id"]),),
+            ).fetchone()
+        return str(row["closing_note"] or "") if row else ""
+
+    def write_closing_note(self, sheet_name: str, text: str) -> str:
+        cleaned = str(text or "").strip()
+        with self.lock, self._connect() as connection:
+            class_row = self._class_row(connection, sheet_name)
+            connection.execute(
+                "UPDATE classes SET closing_note = ? WHERE id = ?",
+                (cleaned, int(class_row["id"])),
+            )
+        return cleaned
+
     @staticmethod
     def _quiz_recap_column(quiz_number: Any) -> str:
         number = str(quiz_number or "").strip()
@@ -966,6 +988,7 @@ class SQLiteFeedbackStore:
             "announcement": announcement,
             "announcement_path": str(announcement_path),
             "lesson_recap": self.read_lesson_recap(sheet_name),
+            "closing_note": self.read_closing_note(sheet_name),
             "quiz_recaps": {
                 "1": self.read_quiz_recap(sheet_name, "1"),
                 "2": self.read_quiz_recap(sheet_name, "2"),

@@ -36,6 +36,9 @@ def comprehensive_comment_paragraph(student: StudentRow, observations: list[str]
 @dataclass
 class FeedbackGenerator:
     class_review: str = ""
+    # Optional hand-written paragraph 3; empty keeps the default homework note +
+    # closing sentence. Quiz-only messages ignore it.
+    closing_note: str = ""
     # "1" / "2" when the teacher picked a quiz in the UI; None lets the row's own
     # data decide, which is all the CLI and comprehensive feedback can do.
     quiz_number: str | None = None
@@ -123,11 +126,18 @@ class FeedbackGenerator:
         # performance, nothing else / homework note + homework reflection + closing.
         joiner = "" if is_chinese else " "
         middle = joiner.join(part.strip() for part in personal_paragraphs if part and part.strip())
-        tail_parts = [
-            homework_note(is_chinese) if wants_homework_note else "",
-            homework or "",
-            closing_sentence(is_chinese),
-        ]
+        custom_tail = self.closing_note.strip() if wants_homework_note else ""
+        if custom_tail:
+            # The teacher wrote paragraph 3 themselves; it replaces the standing
+            # homework note and closing line. A per-student Homework Reflection is
+            # that student's own data, so it still rides along.
+            tail_parts = [custom_tail, homework or ""]
+        else:
+            tail_parts = [
+                homework_note(is_chinese) if wants_homework_note else "",
+                homework or "",
+                closing_sentence(is_chinese),
+            ]
         tail = joiner.join(part.strip() for part in tail_parts if part and part.strip())
         paragraphs = [class_paragraph, middle, tail] if middle else [class_paragraph, tail]
         return clean_parent_feedback_text("\n\n".join(paragraphs))
@@ -138,8 +148,10 @@ def generate_feedback(
     *,
     feedback_type: str = "comprehensive",
     quiz_number: str | None = None,
+    closing_note: str = "",
 ) -> str | None:
     return FeedbackGenerator(
         class_review=class_review,
         quiz_number=quiz_number,
+        closing_note=closing_note,
     ).generate(student, feedback_type=feedback_type)

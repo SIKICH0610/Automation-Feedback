@@ -95,7 +95,10 @@ Select students, then **Generate comments**. Every message is exactly three para
 the greeting with the lesson recap; the student's classroom performance, built from the
 dropdown observations and the teacher's `Remark for Student` note; and a final paragraph
 with the standing homework/app/coin note, any `Homework Reflection`, and the closing
-line. Results land in the `Feedback` column, where you can edit them before pasting —
+line. The **Closing 第三段** box (below the recap, 课堂反馈 mode only) overrides that
+final paragraph verbatim when filled — for exam reminders and the like — with a
+per-student `Homework Reflection` still appended; leave it empty for the default.
+Results land in the `Feedback` column, where you can edit them before pasting —
 click a long cell and it floats open as a full-size box in place.
 
 Absent students are skipped. Fields marked `Not Observed` are left out.
@@ -112,9 +115,11 @@ only that quiz's score and average. The quiz you picked is passed through explic
 a student who has both quizzes recorded can no longer get Quiz 2's score reported inside
 their Quiz 1 message.
 
-Open **Quiz Banks** in the top navigation to edit the per-question feedback: question
-numbers, titles, matching patterns, and the Chinese/English wording. Banks live in the
-same database; the Python bank files seed a bank only the first time it is created, and
+Open **Quiz Banks** in the top navigation to edit the per-question feedback: a bank is
+simply question number → explanation (Chinese/English). The teacher types the missed
+question numbers into `QuizN Mistake` ("3, 5", "第3题", "Q3-5" all parse), and each
+number pulls its explanation — there is no keyword matching. Banks live in the
+database; the Python bank files seed a bank only the first time it is created, and
 after that the editor is the live source.
 
 ## Sending

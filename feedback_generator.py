@@ -223,6 +223,11 @@ def build_parser(*, default_feedback_type: str = "comprehensive") -> argparse.Ar
         help="Optional Chinese class review file for Chinese parent messages.",
     )
     parser.add_argument(
+        "--closing-note",
+        default="",
+        help="Hand-written paragraph 3. Empty keeps the default homework note + closing.",
+    )
+    parser.add_argument(
         "--quiz-number",
         choices=("1", "2"),
         help="Which quiz this run is about. Without it, the quiz is inferred from each row.",
@@ -341,6 +346,7 @@ def main(*, default_feedback_type: str = "comprehensive") -> None:
             class_review=student_class_review,
             feedback_type=args.feedback_type,
             quiz_number=args.quiz_number,
+            closing_note=args.closing_note,
         )
         print_student_result(student, feedback)
 

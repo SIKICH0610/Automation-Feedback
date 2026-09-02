@@ -106,6 +106,18 @@ class SQLiteQuizBankStore:
         finally:
             connection.close()
 
+    @staticmethod
+    def _drop_patterns_column(connection: sqlite3.Connection) -> None:
+        """Keyword matching is gone: entries match by question number only, so the
+        stored patterns column is dropped. Guarded so an older SQLite that cannot
+        drop columns leaves it behind harmlessly (it has a default)."""
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(quiz_bank_entries)")}
+        if "patterns_json" in columns:
+            try:
+                connection.execute("ALTER TABLE quiz_bank_entries DROP COLUMN patterns_json")
+            except sqlite3.OperationalError:
+                pass
+
     def _initialize(self, *, seed_defaults: bool) -> None:
         with self.lock, self._connect() as connection:
             connection.executescript(
@@ -125,7 +137,6 @@ class SQLiteQuizBankStore:
                     bank_id TEXT NOT NULL,
                     question INTEGER NOT NULL,
                     title TEXT NOT NULL DEFAULT '',
-                    patterns_json TEXT NOT NULL DEFAULT '[]',
                     chinese TEXT NOT NULL DEFAULT '',
                     english TEXT NOT NULL DEFAULT '',
                     position INTEGER NOT NULL DEFAULT 0,
@@ -139,6 +150,7 @@ class SQLiteQuizBankStore:
                 ON quiz_bank_entries(bank_id, position, question);
                 """
             )
+            self._drop_patterns_column(connection)
             if seed_defaults:
                 self._seed_defaults(connection)
 
@@ -166,17 +178,16 @@ class SQLiteQuizBankStore:
                 connection.execute(
                     """
                     INSERT INTO quiz_bank_entries(
-                        id, bank_id, question, title, patterns_json,
+                        id, bank_id, question, title,
                         chinese, english, position
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES(?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(uuid4()),
                         bank["id"],
                         issue.question,
                         issue.title,
-                        json.dumps(list(issue.patterns), ensure_ascii=False),
                         issue.chinese,
                         issue.english,
                         position,
@@ -203,7 +214,6 @@ class SQLiteQuizBankStore:
             "entry_id": str(row["id"]),
             "question": int(row["question"]),
             "title": str(row["title"]),
-            "patterns": list(json.loads(str(row["patterns_json"]))),
             "chinese": str(row["chinese"]),
             "english": str(row["english"]),
         }
@@ -236,7 +246,7 @@ class SQLiteQuizBankStore:
             bank = self._bank_row(connection, bank_id)
             entries = connection.execute(
                 """
-                SELECT id, question, title, patterns_json, chinese, english
+                SELECT id, question, title, chinese, english
                 FROM quiz_bank_entries
                 WHERE bank_id = ?
                 ORDER BY position, question
@@ -250,27 +260,6 @@ class SQLiteQuizBankStore:
                 "display_name": str(bank["display_name"]),
                 "entries": [self._entry_dict(row) for row in entries],
             }
-
-    @staticmethod
-    def _normalize_patterns(raw_patterns: Any, question: int) -> list[str]:
-        if isinstance(raw_patterns, str):
-            patterns = raw_patterns.splitlines()
-        elif isinstance(raw_patterns, list):
-            patterns = [str(value) for value in raw_patterns]
-        else:
-            raise QuizBankStoreError(
-                f"Question {question} matching keywords must be a list."
-            )
-
-        normalized = list(dict.fromkeys(pattern.strip() for pattern in patterns if pattern.strip()))
-        for pattern in normalized:
-            try:
-                re.compile(pattern, flags=re.IGNORECASE)
-            except re.error as exc:
-                raise QuizBankStoreError(
-                    f"Question {question} has an invalid matching keyword pattern."
-                ) from exc
-        return normalized
 
     def save_bank(
         self,
@@ -309,10 +298,6 @@ class SQLiteQuizBankStore:
                 {
                     "question": question,
                     "title": str(raw_entry.get("title") or "").strip(),
-                    "patterns": self._normalize_patterns(
-                        raw_entry.get("patterns") or [],
-                        question,
-                    ),
                     "chinese": chinese,
                     "english": english,
                 }
@@ -344,17 +329,16 @@ class SQLiteQuizBankStore:
                 connection.execute(
                     """
                     INSERT INTO quiz_bank_entries(
-                        id, bank_id, question, title, patterns_json,
+                        id, bank_id, question, title,
                         chinese, english, position
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES(?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(uuid4()),
                         bank_id,
                         entry["question"],
                         entry["title"],
-                        json.dumps(entry["patterns"], ensure_ascii=False),
                         entry["chinese"],
                         entry["english"],
                         position,
@@ -375,13 +359,7 @@ class SQLiteQuizBankStore:
         is_chinese = language.lower().startswith("chinese")
         comments: list[str] = []
         for entry in bank["entries"]:
-            matched = entry["question"] in question_numbers
-            if not matched:
-                matched = any(
-                    re.search(pattern, note, flags=re.IGNORECASE)
-                    for pattern in entry["patterns"]
-                )
-            if not matched:
+            if entry["question"] not in question_numbers:
                 continue
             comment = entry["chinese"] if is_chinese else entry["english"]
             if comment:

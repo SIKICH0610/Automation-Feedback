@@ -163,18 +163,6 @@
       fields.className = "quiz-bank-entry-fields";
       fields.append(
         createTextField(
-          "Matching keywords",
-          (entry.patterns || []).join("\n"),
-          (value) => {
-            entry.patterns = value
-              .split(/\r?\n/)
-              .map((pattern) => pattern.trim())
-              .filter(Boolean);
-            markDirty();
-          },
-          { multiline: true, rows: 6, className: "patterns-field" }
-        ),
-        createTextField(
           "Chinese feedback",
           entry.chinese || "",
           (value) => {
@@ -203,10 +191,7 @@
   function applyBank(bank) {
     state.bank = {
       ...bank,
-      entries: (bank.entries || []).map((entry) => ({
-        ...entry,
-        patterns: [...(entry.patterns || [])],
-      })),
+      entries: (bank.entries || []).map((entry) => ({ ...entry })),
     };
     elements.quizBankTitle.textContent = state.bank.display_name;
     elements.bankDisplayName.value = state.bank.display_name;
@@ -289,7 +274,6 @@
       entry_id: null,
       question,
       title: "",
-      patterns: [],
       chinese: "",
       english: "",
     });

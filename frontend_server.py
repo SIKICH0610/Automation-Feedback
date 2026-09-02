@@ -181,7 +181,12 @@ class ActionRunner:
         # from the announcement. The announcement is separately pasted to whole classes,
         # so reusing it here put things like "next week is cancelled" at the top of every
         # student's feedback.
-        class_review_args = ["--class-review", self.store.read_lesson_recap(sheet_name)]
+        class_review_args = [
+            "--class-review",
+            self.store.read_lesson_recap(sheet_name),
+            "--closing-note",
+            self.store.read_closing_note(sheet_name),
+        ]
         attachment_args = [
             item
             for path in (attachment_paths or [])
@@ -442,6 +447,8 @@ class ActionRunner:
                             # Each class opens with its own lesson recap.
                             "--class-review",
                             self.store.read_lesson_recap(sheet_name),
+                            "--closing-note",
+                            self.store.read_closing_note(sheet_name),
                         ]
                     elif action == "paste-comments-bulk":
                         command = [
@@ -1068,6 +1075,13 @@ class FrontendHandler(BaseHTTPRequestHandler):
                     str(payload.get("text") or ""),
                 )
                 self._send_json(200, {"ok": True, "lesson_recap": recap})
+                return
+            if parsed.path == "/api/closing-note/save":
+                note = self.store.write_closing_note(
+                    str(payload.get("sheet") or ""),
+                    str(payload.get("text") or ""),
+                )
+                self._send_json(200, {"ok": True, "closing_note": note})
                 return
             if parsed.path == "/api/quiz-recap/save":
                 sheet_name = str(payload.get("sheet") or "")

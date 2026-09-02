@@ -50,7 +50,6 @@ class QuizBankStoreTest(unittest.TestCase):
         quiz2 = self.store.load_bank(QUIZ2_BANK_ID)
         quiz2["entries"][0]["chinese"] = "数据库中的第一题反馈。"
         quiz2["entries"][0]["english"] = "Question one from the database."
-        quiz2["entries"][0]["patterns"] = ["custom triangle keyword"]
         saved = self.store.save_bank(
             QUIZ2_BANK_ID,
             class_name=quiz2["class_name"],
@@ -73,16 +72,22 @@ class QuizBankStoreTest(unittest.TestCase):
                 ),
                 "数据库中的第一题反馈。",
             )
+            # Keyword matching is gone on purpose: text that mentions no question
+            # number produces no comment, no matter what it says.
             self.assertEqual(
                 runtime_quiz_bank_comment(
                     QUIZ2_BANK_ID,
                     "custom triangle keyword",
                     language="English",
                 ),
+                "",
+            )
+            self.assertEqual(
+                runtime_quiz_bank_comment(QUIZ2_BANK_ID, "第1题", language="English"),
                 "Question one from the database.",
             )
 
-    def test_duplicate_questions_and_invalid_patterns_are_rejected(self) -> None:
+    def test_duplicate_questions_are_rejected(self) -> None:
         quiz2 = self.store.load_bank(QUIZ2_BANK_ID)
         duplicate = [quiz2["entries"][0], dict(quiz2["entries"][0])]
         with self.assertRaises(QuizBankStoreError):
@@ -94,15 +99,7 @@ class QuizBankStoreTest(unittest.TestCase):
                 entries=duplicate,
             )
 
-        invalid = [dict(quiz2["entries"][0], patterns=["("])]
-        with self.assertRaises(QuizBankStoreError):
-            self.store.save_bank(
-                QUIZ2_BANK_ID,
-                class_name=quiz2["class_name"],
-                quiz_name=quiz2["quiz_name"],
-                display_name=quiz2["display_name"],
-                entries=invalid,
-            )
+
 
 
 if __name__ == "__main__":

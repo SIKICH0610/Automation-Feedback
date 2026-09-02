@@ -18,6 +18,7 @@ const state = {
   recapDirty: false,
   recaps: { general: "", "1": "", "2": "" },
   quizRecapDirty: false,
+  closingDirty: false,
   attachments: [],
   selectedAttachments: new Set(),
   bulkUnchecked: new Set(),
@@ -101,6 +102,7 @@ function markDirty(kind = "sheet") {
   if (kind === "announcement") state.announcementDirty = true;
   else if (kind === "recap") state.recapDirty = true;
   else if (kind === "quizRecap") state.quizRecapDirty = true;
+  else if (kind === "closing") state.closingDirty = true;
   else state.dirty = true;
   setSaveState("Unsaved changes", "dirty");
 }
@@ -989,6 +991,7 @@ function renderMode() {
   elements.recapHint.textContent = meta.hint;
   elements.recapText.value = state.recaps[recapKey()] || "";
   elements.generateTarget.textContent = `Writes to ${meta.column}`;
+  elements.closingBlock.hidden = state.contentMode !== "general";
   elements.pasteTarget.textContent = `Uses ${meta.column}`;
 }
 
@@ -1061,6 +1064,8 @@ function applySheetData(data, preserve = null) {
   };
   state.recapDirty = false;
   state.quizRecapDirty = false;
+  elements.closingText.value = data.closing_note || "";
+  state.closingDirty = false;
   renderMode();
   state.attachments = data.attachments || [];
   state.selectedAttachments = new Set(state.attachments.map((attachment) => attachment.id));
@@ -1131,6 +1136,16 @@ async function saveLessonRecap({ quiet = false } = {}) {
   if (!quiet) toast("Lesson recap saved.");
 }
 
+async function saveClosingNote({ quiet = false } = {}) {
+  if (!state.closingDirty && quiet) return;
+  await api("/api/closing-note/save", {
+    method: "POST",
+    body: JSON.stringify({ sheet: state.sheetName, text: elements.closingText.value }),
+  });
+  state.closingDirty = false;
+  if (!quiet) toast("Closing paragraph saved.");
+}
+
 async function saveQuizRecap({ quiet = false } = {}) {
   if (!state.quizRecapDirty && quiet) return;
   const quizNumber = modeQuizNumber();
@@ -1180,11 +1195,13 @@ async function saveAll({ quiet = false } = {}) {
     await saveAnnouncement({ quiet: true });
     await saveLessonRecap({ quiet: true });
     await saveQuizRecap({ quiet: true });
+    await saveClosingNote({ quiet: true });
     await saveSheet({ quiet: true });
     state.dirty = false;
     state.announcementDirty = false;
     state.recapDirty = false;
     state.quizRecapDirty = false;
+    state.closingDirty = false;
     setSaveState("Saved", "saved");
     if (!quiet) toast("All changes saved.");
   } catch (error) {
@@ -1429,8 +1446,12 @@ function bindEvents() {
   elements.saveRecap.addEventListener("click", async () => {
     try {
       setBusy(true, "Saving recap", state.sheetName);
-      if (state.contentMode === "general") await saveLessonRecap();
-      else await saveQuizRecap();
+      if (state.contentMode === "general") {
+        await saveLessonRecap();
+        if (state.closingDirty) await saveClosingNote({ quiet: true });
+      } else {
+        await saveQuizRecap();
+      }
       if (!state.dirty) setSaveState("Saved", "saved");
     } catch (error) {
       toast(error.message, true);
@@ -1441,6 +1462,7 @@ function bindEvents() {
   elements.recapText.addEventListener("input", () =>
     markDirty(state.contentMode === "general" ? "recap" : "quizRecap")
   );
+  elements.closingText.addEventListener("input", () => markDirty("closing"));
   elements.addAttachment.addEventListener("click", () => elements.attachmentInput.click());
   elements.attachmentInput.addEventListener("change", () => uploadAttachments(elements.attachmentInput.files));
   document.querySelectorAll(".mode-switch .segment").forEach((button) => {
@@ -1481,7 +1503,7 @@ function bindEvents() {
     }
   });
   window.addEventListener("beforeunload", (event) => {
-    if (!state.dirty && !state.announcementDirty && !state.recapDirty && !state.quizRecapDirty) return;
+    if (!state.dirty && !state.announcementDirty && !state.recapDirty && !state.quizRecapDirty && !state.closingDirty) return;
     event.preventDefault();
     event.returnValue = "";
   });
@@ -1536,6 +1558,8 @@ async function initialize() {
     "attachmentEmpty",
     "recapTitle",
     "recapHint",
+    "closingBlock",
+    "closingText",
     "generateTarget",
     "pasteTarget",
     "actionGenerate",
