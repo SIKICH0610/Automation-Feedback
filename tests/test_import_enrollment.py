@@ -118,5 +118,70 @@ class ImportEnrollmentHeaderTest(unittest.TestCase):
         self.assertIn("classId", message)  # the headers it DID see
 
 
+class ImportEnrollmentFormatTest(unittest.TestCase):
+    HEADER = "classId,className,classTimeDescription,subject,firstName,lastName,学员id,payStatus,是否入班"
+
+    def _write(self, data: bytes, suffix: str) -> Path:
+        handle = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+        handle.write(data)
+        handle.close()
+        return Path(handle.name)
+
+    def test_csv_with_utf8_bom(self) -> None:
+        text = self.HEADER + "\n11,Geo C,Sun 09:00,Math,Ann,Lee,901,Paid,是\n"
+        path = self._write(b"\xef\xbb\xbf" + text.encode("utf-8"), ".csv")
+        groups = group_by_class(read_enrollment_rows(path), class_ids=None)
+        self.assertEqual(groups["11"]["students"][0]["uid"], "901")
+
+    def test_csv_saved_by_chinese_excel_gbk(self) -> None:
+        text = self.HEADER + "\n12,Geo D,Sun 09:00,Math,Bo,Han,902,Paid,是\n"
+        path = self._write(text.encode("gb18030"), ".csv")
+        groups = group_by_class(read_enrollment_rows(path), class_ids=None)
+        self.assertEqual(groups["12"]["students"][0]["uid"], "902")
+
+    def test_json_bare_list_with_alias_keys(self) -> None:
+        payload = [
+            {"Class ID": 13, "className": "Geo E", "上课时间": "Sat 1pm", "First Name": "Cy",
+             "lastName": "Wu", "studentId": 903, "Pay Status": "paid", "是否入班": "是", "extra": 1},
+            {"Class ID": 13, "className": "Geo E", "上课时间": "Sat 1pm", "First Name": "Di",
+             "lastName": "Xu", "studentId": 904, "Pay Status": "Unpaid", "是否入班": "是"},
+        ]
+        import json as jsonlib
+        path = self._write(jsonlib.dumps(payload, ensure_ascii=False).encode("utf-8"), ".json")
+        groups = group_by_class(read_enrollment_rows(path), class_ids=None)
+        uids = [s["uid"] for s in groups["13"]["students"]]
+        self.assertEqual(uids, ["903"])  # Unpaid filtered out
+
+    def test_json_wrapped_in_platform_envelope(self) -> None:
+        import json as jsonlib
+        payload = {"code": 0, "data": {"total": 1, "list": [
+            {"classId": "14", "className": "Geo F", "classTimeDescription": "Sun",
+             "firstName": "Ed", "lastName": "Yao", "学员id": "905", "payStatus": "Paid", "是否入班": "是"}
+        ]}}
+        path = self._write(jsonlib.dumps(payload, ensure_ascii=False).encode("utf-8"), ".json")
+        groups = group_by_class(read_enrollment_rows(path), class_ids=None)
+        self.assertEqual(groups["14"]["students"][0]["uid"], "905")
+
+    def test_misnamed_file_is_sniffed_by_content(self) -> None:
+        # xlsx bytes with a .csv name still import: format comes from content.
+        def build(workbook):
+            sheet = workbook.active
+            sheet.append(["classId", "className", "classTimeDescription", "subject",
+                          "firstName", "lastName", "学员id", "payStatus", "是否入班"])
+            sheet.append(["15", "Geo G", "Fri", "Math", "Fay", "Zhu", "906", "Paid", "是"])
+
+        real = write_workbook(build)
+        misnamed = real.with_suffix(".csv")
+        misnamed.write_bytes(real.read_bytes())
+        groups = group_by_class(read_enrollment_rows(misnamed), class_ids=None)
+        self.assertEqual(groups["15"]["students"][0]["uid"], "906")
+
+    def test_legacy_xls_gets_a_clear_error(self) -> None:
+        path = self._write(b"\xd0\xcf\x11\xe0junkjunk", ".xls")
+        with self.assertRaises(ValueError) as caught:
+            read_enrollment_rows(path)
+        self.assertIn(".xlsx", str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

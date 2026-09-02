@@ -160,8 +160,12 @@ roughly three seconds per student.
 
 ### Import a semester's enrollment
 
-The **Import Students** tab reads a platform enrollment export (`classId`, `className`,
-`classTimeDescription`, `firstName`/`lastName`, `学员id`, `payStatus`, `是否入班`). The reader is deliberately
+The **Import Students** tab reads a platform enrollment export — `.xlsx` (including the
+platform's Strict OOXML variant), `.csv` (UTF-8 or GBK), or `.json` (a bare list of
+records, or wrapped in an API envelope like `{"data": {"list": [...]}}`) — with the
+format detected from the file's content, not its name. Required fields: `classId`,
+`className`, `classTimeDescription`, `firstName`/`lastName`, `学员id`, `payStatus`,
+`是否入班`. The reader is deliberately
 forgiving about the file's shape: columns are matched by name (with common renames and
 case/spacing differences accepted), extra columns and reordering are ignored, the header
 row is located by content even under a banner row, and instruction sheets before the

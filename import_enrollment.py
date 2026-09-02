@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import codecs
+import csv
 import io
+import json
 import warnings
 import zipfile
 from pathlib import Path
@@ -69,12 +72,11 @@ _ALIAS_TO_FIELD = {
 }
 
 
-def _headers_in_row(worksheet: Any, row_number: int) -> tuple[dict[str, int], dict[str, int]]:
-    """(canonical field -> column, raw header -> column) for one candidate row."""
+def _headers_in_row(cells: list[Any]) -> tuple[dict[str, int], dict[str, int]]:
+    """(canonical field -> column index, raw header -> column index) for one row."""
     fields: dict[str, int] = {}
     raw: dict[str, int] = {}
-    for column in range(1, worksheet.max_column + 1):
-        value = worksheet.cell(row_number, column).value
+    for column, value in enumerate(cells):
         text = str(value or "").strip()
         if not text:
             continue
@@ -83,14 +85,6 @@ def _headers_in_row(worksheet: Any, row_number: int) -> tuple[dict[str, int], di
         if field and field not in fields:
             fields[field] = column
     return fields, raw
-
-
-def normalize_id(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    return str(value).strip()
 
 
 # Strict OOXML uses these namespace roots instead of the transitional ones.
@@ -108,23 +102,24 @@ _STRICT_TO_TRANSITIONAL = (
 )
 
 
-def _load_workbook_lenient(xlsx_path: Path):
-    """load_workbook, plus a fallback for Strict OOXML files.
+def _load_workbook_lenient(xlsx_bytes: bytes):
+    """load_workbook from bytes, plus a fallback for Strict OOXML files.
 
-    The two dialects are structurally identical for our purposes; rewriting the
-    namespace URIs to the transitional ones is enough for openpyxl to read the
-    data. Only attempted when the normal load comes back with no worksheets, so
-    ordinary files pay nothing.
+    Loading from bytes (not a path) also skips openpyxl's extension check, so a
+    workbook that arrived under the wrong file name still opens. For Strict
+    OOXML -- which openpyxl silently loads as zero worksheets -- the two dialects
+    are structurally identical for our purposes; rewriting the namespace URIs to
+    the transitional ones is enough to read the data. Ordinary files pay nothing.
     """
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        workbook = load_workbook(xlsx_path, data_only=True)
+        workbook = load_workbook(io.BytesIO(xlsx_bytes), data_only=True)
         if workbook.worksheets:
             return workbook
         workbook.close()
 
         buffer = io.BytesIO()
-        with zipfile.ZipFile(xlsx_path) as source, zipfile.ZipFile(
+        with zipfile.ZipFile(io.BytesIO(xlsx_bytes)) as source, zipfile.ZipFile(
             buffer, "w", zipfile.ZIP_DEFLATED
         ) as target:
             for item in source.infolist():
@@ -137,52 +132,177 @@ def _load_workbook_lenient(xlsx_path: Path):
         return load_workbook(buffer, data_only=True)
 
 
-def read_enrollment_rows(xlsx_path: Path) -> list[dict[str, Any]]:
-    workbook = _load_workbook_lenient(xlsx_path)
+def _sniff_format(data: bytes) -> str:
+    """xlsx / json / csv, decided by content so a misnamed file still imports."""
+    if data.startswith(b"PK\x03\x04"):
+        return "xlsx"
+    if data.startswith(b"\xd0\xcf\x11\xe0"):
+        raise ValueError(
+            "This is a legacy .xls file. Re-export it as .xlsx or .csv and try again."
+        )
+    head = data[:4096]
+    if head.startswith(codecs.BOM_UTF8):
+        head = head[len(codecs.BOM_UTF8):]
+    stripped = head.lstrip()
+    if stripped[:1] in (b"{", b"["):
+        return "json"
+    return "csv"
+
+
+def _decode_text(data: bytes) -> str:
+    # Platform exports are UTF-8 (often with BOM); Excel-saved Chinese CSVs are GBK.
     try:
-        best: tuple[int, Any, int, dict[str, int], dict[str, int]] | None = None
-        for worksheet in workbook.worksheets:
-            for row_number in range(1, min(HEADER_SCAN_ROWS, worksheet.max_row or 1) + 1):
-                fields, raw = _headers_in_row(worksheet, row_number)
-                found = sum(1 for field in REQUIRED_FIELDS if field in fields)
-                if best is None or found > best[0]:
-                    best = (found, worksheet, row_number, fields, raw)
-                if found == len(REQUIRED_FIELDS):
-                    break
-            else:
-                continue
-            break
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return data.decode("gb18030")
 
-        if best is None or best[0] < len(REQUIRED_FIELDS):
-            fields = best[3] if best else {}
-            raw = best[4] if best else {}
-            missing = [field for field in REQUIRED_FIELDS if field not in fields]
-            seen = ", ".join(sorted(raw)) or "(no headers found)"
-            raise ValueError(
-                f"{xlsx_path.name} has no row containing the required column(s): "
-                f"{', '.join(missing)}. Closest header row contained: {seen}"
-            )
 
-        _, worksheet, header_row, fields, raw = best
-        # Canonical fields win their columns; every other column rides along under
-        # its own header so future optional lookups keep working.
-        taken = set(fields.values())
-        columns = dict(fields)
-        for name, column in raw.items():
-            if column not in taken and name not in columns:
-                columns[name] = column
+def _grid_from_csv(data: bytes) -> list[list[Any]]:
+    text = _decode_text(data)
+    sample = text[:4096]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t")
+    except csv.Error:
+        dialect = csv.excel
+    return [row for row in csv.reader(io.StringIO(text), dialect)]
 
-        rows: list[dict[str, Any]] = []
-        for row_number in range(header_row + 1, worksheet.max_row + 1):
-            first_name = worksheet.cell(row_number, columns["firstName"]).value
-            if first_name is None or not str(first_name).strip():
-                continue
-            rows.append(
-                {name: worksheet.cell(row_number, column).value for name, column in columns.items()}
-            )
-        return rows
+
+def _grids_from_xlsx(xlsx_bytes: bytes) -> list[list[list[Any]]]:
+    workbook = _load_workbook_lenient(xlsx_bytes)
+    try:
+        return [
+            [list(row) for row in worksheet.iter_rows(values_only=True)]
+            for worksheet in workbook.worksheets
+        ]
     finally:
         workbook.close()
+
+
+def _rows_from_grids(grids: list[list[list[Any]]], source_name: str) -> list[dict[str, Any]]:
+    best: tuple[int, list[list[Any]], int, dict[str, int], dict[str, int]] | None = None
+    for grid in grids:
+        for row_index in range(min(HEADER_SCAN_ROWS, len(grid))):
+            fields, raw = _headers_in_row(grid[row_index])
+            found = sum(1 for field in REQUIRED_FIELDS if field in fields)
+            if best is None or found > best[0]:
+                best = (found, grid, row_index, fields, raw)
+            if found == len(REQUIRED_FIELDS):
+                break
+        else:
+            continue
+        break
+
+    if best is None or best[0] < len(REQUIRED_FIELDS):
+        fields = best[3] if best else {}
+        raw = best[4] if best else {}
+        missing = [field for field in REQUIRED_FIELDS if field not in fields]
+        seen = ", ".join(sorted(raw)) or "(no headers found)"
+        raise ValueError(
+            f"{source_name} has no row containing the required column(s): "
+            f"{', '.join(missing)}. Closest header row contained: {seen}"
+        )
+
+    _, grid, header_index, fields, raw = best
+    # Canonical fields win their columns; every other column rides along under
+    # its own header so future optional lookups keep working.
+    taken = set(fields.values())
+    columns = dict(fields)
+    for name, column in raw.items():
+        if column not in taken and name not in columns:
+            columns[name] = column
+
+    rows: list[dict[str, Any]] = []
+    for cells in grid[header_index + 1:]:
+        def cell(column: int) -> Any:
+            return cells[column] if column < len(cells) else None
+
+        first_name = cell(columns["firstName"])
+        if first_name is None or not str(first_name).strip():
+            continue
+        rows.append({name: cell(column) for name, column in columns.items()})
+    return rows
+
+
+def _rows_from_json(data: bytes, source_name: str) -> list[dict[str, Any]]:
+    try:
+        payload = json.loads(_decode_text(data))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{source_name} is not valid JSON: {exc}") from exc
+
+    records = None
+    if isinstance(payload, list):
+        records = payload
+    elif isinstance(payload, dict):
+        # Platform APIs wrap the list: {"data": [...]}, {"data": {"list": [...]}} etc.
+        queue = list(payload.values())
+        depth_left = len(queue) * 8
+        while queue and depth_left > 0:
+            depth_left -= 1
+            value = queue.pop(0)
+            if isinstance(value, list) and value and all(isinstance(item, dict) for item in value):
+                records = value
+                break
+            if isinstance(value, dict):
+                queue.extend(value.values())
+    if records is None:
+        raise ValueError(f"{source_name} does not contain a list of student records.")
+
+    rows: list[dict[str, Any]] = []
+    seen_fields: set[str] = set()
+    seen_keys: set[str] = set()
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        row: dict[str, Any] = {}
+        for key, value in record.items():
+            text = str(key or "").strip()
+            if not text:
+                continue
+            seen_keys.add(text)
+            field = _ALIAS_TO_FIELD.get(_normalize_header(text))
+            if field:
+                row.setdefault(field, value)
+                seen_fields.add(field)
+            else:
+                row.setdefault(text, value)
+        first_name = str(row.get("firstName") or "").strip()
+        if first_name:
+            rows.append(row)
+
+    missing = [field for field in REQUIRED_FIELDS if field not in seen_fields]
+    if missing:
+        seen = ", ".join(sorted(seen_keys)) or "(no keys found)"
+        raise ValueError(
+            f"{source_name} is missing the required field(s): "
+            f"{', '.join(missing)}. Records contained: {seen}"
+        )
+    return rows
+
+
+def normalize_id(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
+def read_enrollment_rows(xlsx_path: Path) -> list[dict[str, Any]]:
+    """Read an enrollment export: .xlsx (transitional or strict), .csv, or .json.
+
+    The format is sniffed from the file's bytes, not its name, so an upload that
+    lost its extension -- or carries the wrong one -- still imports.
+    """
+    source = Path(xlsx_path)
+    data = source.read_bytes()
+    file_format = _sniff_format(data)
+    if file_format == "json":
+        return _rows_from_json(data, source.name)
+    if file_format == "csv":
+        grids = [_grid_from_csv(data)]
+    else:
+        grids = _grids_from_xlsx(data)
+    return _rows_from_grids(grids, source.name)
 
 
 def group_by_class(
@@ -269,7 +389,7 @@ def build_parser() -> argparse.ArgumentParser:
             "named semester block. Prints a preview by default; pass --commit to write."
         )
     )
-    parser.add_argument("--source-file", type=Path, required=True, help="Enrollment export xlsx.")
+    parser.add_argument("--source-file", type=Path, required=True, help="Enrollment export (.xlsx, .csv, or .json).")
     parser.add_argument(
         "--semester",
         required=True,
