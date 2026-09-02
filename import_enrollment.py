@@ -16,17 +16,67 @@ DEFAULT_DATABASE = DEFAULT_APP_DATA_DIR / "feedback.db"
 DEFAULT_EXPORT_DIR = PROJECT_DIR / "exports"
 DEFAULT_ANNOUNCEMENT_DIR = PROJECT_DIR / "announcements"
 
-REQUIRED_COLUMNS = (
+# Canonical field -> header spellings accepted for it, in normalized form (see
+# _normalize_header). The canonical names are what group_by_class reads. Matching
+# is by name and alias rather than by position, extra columns are ignored, and the
+# header row is located by content -- so a platform export that adds columns,
+# reorders them, renames them within these aliases, or grows a banner row above
+# the table imports without any code change.
+FIELD_ALIASES: dict[str, tuple[str, ...]] = {
+    "classId": ("classid", "班级id", "课程id"),
+    "className": ("classname", "班级名称", "课程名称", "班级名"),
+    "classTimeDescription": ("classtimedescription", "classtime", "上课时间"),
+    "subject": ("subject", "科目", "学科"),
+    "firstName": ("firstname", "givenname", "名"),
+    "lastName": ("lastname", "familyname", "surname", "姓"),
+    "学员id": ("学员id", "studentid", "学生id", "学员编号"),
+    "payStatus": ("paystatus", "支付状态", "付款状态", "缴费状态"),
+    "是否入班": ("是否入班",),
+    "In group": ("ingroup", "是否入群"),
+}
+
+# Without these the file cannot be imported at all. classTimeDescription, subject,
+# and In group are cosmetic: when missing they come back empty instead of failing.
+REQUIRED_FIELDS = (
     "classId",
     "className",
-    "classTimeDescription",
-    "subject",
     "firstName",
     "lastName",
     "学员id",
     "payStatus",
     "是否入班",
 )
+
+# How many top rows to scan for the header row.
+HEADER_SCAN_ROWS = 10
+
+
+def _normalize_header(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    for junk in (" ", "\u3000", "_", "-"):
+        text = text.replace(junk, "")
+    return text
+
+
+_ALIAS_TO_FIELD = {
+    alias: field for field, aliases in FIELD_ALIASES.items() for alias in aliases
+}
+
+
+def _headers_in_row(worksheet: Any, row_number: int) -> tuple[dict[str, int], dict[str, int]]:
+    """(canonical field -> column, raw header -> column) for one candidate row."""
+    fields: dict[str, int] = {}
+    raw: dict[str, int] = {}
+    for column in range(1, worksheet.max_column + 1):
+        value = worksheet.cell(row_number, column).value
+        text = str(value or "").strip()
+        if not text:
+            continue
+        raw.setdefault(text, column)
+        field = _ALIAS_TO_FIELD.get(_normalize_header(text))
+        if field and field not in fields:
+            fields[field] = column
+    return fields, raw
 
 
 def normalize_id(value: Any) -> str:
@@ -40,27 +90,45 @@ def normalize_id(value: Any) -> str:
 def read_enrollment_rows(xlsx_path: Path) -> list[dict[str, Any]]:
     workbook = load_workbook(xlsx_path, data_only=True)
     try:
-        worksheet = workbook.worksheets[0]
-        headers: dict[str, int] = {}
-        for column in range(1, worksheet.max_column + 1):
-            raw_header = worksheet.cell(1, column).value
-            if raw_header is None or not str(raw_header).strip():
+        best: tuple[int, Any, int, dict[str, int], dict[str, int]] | None = None
+        for worksheet in workbook.worksheets:
+            for row_number in range(1, min(HEADER_SCAN_ROWS, worksheet.max_row or 1) + 1):
+                fields, raw = _headers_in_row(worksheet, row_number)
+                found = sum(1 for field in REQUIRED_FIELDS if field in fields)
+                if best is None or found > best[0]:
+                    best = (found, worksheet, row_number, fields, raw)
+                if found == len(REQUIRED_FIELDS):
+                    break
+            else:
                 continue
-            headers[str(raw_header).strip()] = column
+            break
 
-        missing = [name for name in REQUIRED_COLUMNS if name not in headers]
-        if missing:
+        if best is None or best[0] < len(REQUIRED_FIELDS):
+            fields = best[3] if best else {}
+            raw = best[4] if best else {}
+            missing = [field for field in REQUIRED_FIELDS if field not in fields]
+            seen = ", ".join(sorted(raw)) or "(no headers found)"
             raise ValueError(
-                f"{xlsx_path.name} is missing expected column(s): {', '.join(missing)}"
+                f"{xlsx_path.name} has no row containing the required column(s): "
+                f"{', '.join(missing)}. Closest header row contained: {seen}"
             )
 
+        _, worksheet, header_row, fields, raw = best
+        # Canonical fields win their columns; every other column rides along under
+        # its own header so future optional lookups keep working.
+        taken = set(fields.values())
+        columns = dict(fields)
+        for name, column in raw.items():
+            if column not in taken and name not in columns:
+                columns[name] = column
+
         rows: list[dict[str, Any]] = []
-        for row_number in range(2, worksheet.max_row + 1):
-            first_name = worksheet.cell(row_number, headers["firstName"]).value
+        for row_number in range(header_row + 1, worksheet.max_row + 1):
+            first_name = worksheet.cell(row_number, columns["firstName"]).value
             if first_name is None or not str(first_name).strip():
                 continue
             rows.append(
-                {name: worksheet.cell(row_number, column).value for name, column in headers.items()}
+                {name: worksheet.cell(row_number, column).value for name, column in columns.items()}
             )
         return rows
     finally:
@@ -76,7 +144,7 @@ def group_by_class(
     seen_uids_by_class: dict[str, set[str]] = {}
 
     for row in rows:
-        if str(row.get("payStatus") or "").strip() != "Paid":
+        if str(row.get("payStatus") or "").strip().lower() != "paid":
             continue
         if str(row.get("是否入班") or "").strip() != "是":
             continue

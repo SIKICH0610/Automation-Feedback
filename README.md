@@ -161,8 +161,12 @@ roughly three seconds per student.
 ### Import a semester's enrollment
 
 The **Import Students** tab reads a platform enrollment export (`classId`, `className`,
-`classTimeDescription`, `firstName`/`lastName`, `学员id`). Only `payStatus = Paid` and
-`是否入班 = 是` rows are imported. Choose the file, name the semester (or pick an existing
+`firstName`/`lastName`, `学员id`, `payStatus`, `是否入班`). The reader is deliberately
+forgiving about the file's shape: columns are matched by name (with common renames and
+case/spacing differences accepted), extra columns and reordering are ignored, the header
+row is located by content even under a banner row, and instruction sheets before the
+data sheet are skipped — so most platform export changes need no app update. Only
+`payStatus = Paid` and `是否入班 = 是` rows are imported. Choose the file, name the semester (or pick an existing
 one), **Preview** to see the classes and counts found, untick anything you don't want,
 then **Commit Import**.
 
