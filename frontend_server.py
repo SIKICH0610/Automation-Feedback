@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from copy import copy
+import time as _time
 from datetime import date, datetime, time
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -97,6 +98,38 @@ def run_worker(argv: list[str]) -> None:
     else:
         from feedback_generator import main as worker_main
     worker_main()
+
+
+# Long actions run as background jobs so the interface can show live progress and
+# offer a working cancel. Each job wraps one ActionRunner.run call; the registry is
+# tiny and in-memory -- jobs die with the server.
+ACTION_JOBS: dict[str, dict[str, Any]] = {}
+ACTION_JOBS_LOCK = threading.Lock()
+_BATCH_ITEM_RE = re.compile(r"Batch item (\d+)/(\d+)")
+
+
+def _new_action_job(label_hint: str) -> dict[str, Any]:
+    job: dict[str, Any] = {
+        "id": os.urandom(6).hex(),
+        "state": "running",
+        "label": label_hint,
+        "detail": "",
+        "done": 0,
+        "total": 0,
+        "started": _time.time(),
+        "cancel": threading.Event(),
+        "process": None,
+        "on_row": None,
+        "result": None,
+        "error": "",
+    }
+    with ACTION_JOBS_LOCK:
+        # Keep the registry from growing forever across a long session.
+        finished = [key for key, item in ACTION_JOBS.items() if item["state"] != "running"]
+        for key in finished[:-20] if len(finished) > 20 else []:
+            ACTION_JOBS.pop(key, None)
+        ACTION_JOBS[job["id"]] = job
+    return job
 
 
 class ActionRunner:
@@ -300,6 +333,8 @@ class ActionRunner:
         self,
         payload: dict[str, Any],
         environment: dict[str, str],
+        *,
+        job: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Run one action across whole class rosters, one class at a time.
 
@@ -348,18 +383,44 @@ class ActionRunner:
         failed_sheets: list[str] = []
         checked_sheets = 0
 
+        rows_by_sheet = {
+            sheet_name: [
+                int(row["excel_row"])
+                for row in self.store.load_sheet(sheet_name)["rows"]
+                if row.get("excel_row")
+            ]
+            for sheet_name in sheets
+        }
+        # Progress counts students for the per-student actions; generate runs one
+        # child per class with no per-row output, so it counts classes instead.
+        per_student = action != "generate-comments-bulk"
+        if job is not None:
+            job["total"] = (
+                sum(len(rows) for rows in rows_by_sheet.values()) if per_student else len(sheets)
+            )
+            job["done"] = 0
+        completed_students = 0
+
         with self.store.lock:
             self.store.prepare_runtime_workbook()
             try:
                 for sheet_name in sheets:
-                    rows = [
-                        int(row["excel_row"])
-                        for row in self.store.load_sheet(sheet_name)["rows"]
-                        if row.get("excel_row")
-                    ]
+                    if job is not None and job["cancel"].is_set():
+                        sections.append("(cancelled before the remaining classes)")
+                        break
+                    rows = rows_by_sheet[sheet_name]
                     if not rows:
                         sections.append(f"===== {sheet_name} =====\n(no students on this roster)")
                         continue
+                    if job is not None:
+                        job["detail"] = sheet_name
+                        if per_student:
+                            base = completed_students
+
+                            def _on_row(done: int, total: int, base: int = base) -> None:
+                                job["done"] = base + done
+
+                            job["on_row"] = _on_row
 
                     common = [
                         "--workbook",
@@ -407,34 +468,24 @@ class ActionRunner:
                             channel,
                         ]
                     try:
-                        completed = subprocess.run(
-                            command,
-                            cwd=PROJECT_DIR,
-                            capture_output=True,
-                            text=True,
-                            encoding="utf-8",
-                            errors="replace",
-                            timeout=ACTION_TIMEOUT_SECONDS,
-                            env=environment,
-                            check=False,
+                        returncode, body, class_cancelled = self._run_child(
+                            command, environment, label=f"{verb} ({sheet_name})", job=job
                         )
-                    except subprocess.TimeoutExpired:
+                    except FrontendError as exc:
                         failed_sheets.append(sheet_name)
-                        sections.append(
-                            f"===== {sheet_name} =====\n"
-                            f"Timed out after {ACTION_TIMEOUT_SECONDS // 60} minutes."
-                        )
+                        sections.append(f"===== {sheet_name} =====\n{exc}")
                         continue
 
                     checked_sheets += 1
-                    if completed.returncode != 0:
+                    if returncode != 0 and not class_cancelled:
                         failed_sheets.append(sheet_name)
-                    body = "\n".join(
-                        part
-                        for part in (completed.stdout.strip(), completed.stderr.strip())
-                        if part
-                    )
                     sections.append(f"===== {sheet_name} =====\n{body}")
+                    completed_students += len(rows)
+                    if job is not None and not per_student:
+                        job["done"] += 1
+                    if class_cancelled:
+                        sections.append("(cancelled)")
+                        break
             finally:
                 self.store.sync_runtime_workbook()
                 self.store.remove_runtime_workbook()
@@ -446,15 +497,109 @@ class ActionRunner:
         label = f"{verb} for {checked_sheets} class(es)"
         if failed_sheets:
             label += f"; {len(failed_sheets)} had errors"
+        cancelled = bool(job is not None and job["cancel"].is_set())
+        if cancelled:
+            label += f" — cancelled after {job.get('done', 0)}/{job.get('total', 0)}"
         output = "\n\n".join(sections)
         if len(output) > 50000:
             output = output[-50000:]
         return {
             "ok": not failed_sheets,
+            "cancelled": cancelled,
             "label": label,
             "returncode": 1 if failed_sheets else 0,
             "output": output,
         }
+
+    def _run_child(
+        self,
+        command: list[str],
+        environment: dict[str, str],
+        *,
+        label: str,
+        job: dict[str, Any] | None,
+    ) -> tuple[int, str, bool]:
+        """(returncode, combined output, cancelled).
+
+        Without a job this is the old blocking subprocess.run. With one, the child's
+        stdout is streamed line by line: "Batch item i/N" lines update the job's
+        progress, and cancel terminates the child -- rows already processed keep
+        their written results.
+        """
+        if job is None:
+            try:
+                completed = subprocess.run(
+                    command,
+                    cwd=PROJECT_DIR,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=ACTION_TIMEOUT_SECONDS,
+                    env=environment,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise FrontendError(
+                    f"{label} timed out after {ACTION_TIMEOUT_SECONDS // 60} minutes."
+                ) from exc
+            output = "\n".join(
+                part for part in (completed.stdout.strip(), completed.stderr.strip()) if part
+            )
+            return completed.returncode, output, False
+
+        process = subprocess.Popen(
+            command,
+            cwd=PROJECT_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=environment,
+        )
+        job["process"] = process
+        timed_out = threading.Event()
+
+        def _kill_on_timeout() -> None:
+            timed_out.set()
+            process.kill()
+
+        watchdog = threading.Timer(ACTION_TIMEOUT_SECONDS, _kill_on_timeout)
+        watchdog.daemon = True
+        watchdog.start()
+        lines: list[str] = []
+        cancelled = False
+        try:
+            assert process.stdout is not None
+            for line in process.stdout:
+                lines.append(line)
+                match = _BATCH_ITEM_RE.search(line)
+                if match:
+                    on_row = job.get("on_row")
+                    if on_row:
+                        on_row(int(match.group(1)), int(match.group(2)))
+                if job["cancel"].is_set():
+                    cancelled = True
+                    process.terminate()
+                    break
+            tail = process.stdout.read()
+            if tail:
+                lines.append(tail)
+        finally:
+            watchdog.cancel()
+            job["process"] = None
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        if timed_out.is_set():
+            raise FrontendError(
+                f"{label} timed out after {ACTION_TIMEOUT_SECONDS // 60} minutes."
+            )
+        cancelled = cancelled or job["cancel"].is_set()
+        return process.returncode or 0, "".join(lines).strip(), cancelled
 
     def _app_utility(
         self,
@@ -547,10 +692,14 @@ class ActionRunner:
 
         return statuses
 
-    def run(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def run(self, payload: dict[str, Any], *, job: dict[str, Any] | None = None) -> dict[str, Any]:
         environment = os.environ.copy()
         environment["PYTHONUTF8"] = "1"
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        # Children print progress lines ("Batch item i/N") that the job streaming
+        # reads live; with a pipe for stdout Python would block-buffer them and the
+        # progress bar would sit at zero until the child exits.
+        environment["PYTHONUNBUFFERED"] = "1"
         environment["FEEDBACK_DATABASE_PATH"] = str(self.store.database_path)
 
         if str(payload.get("action") or "").strip() in {
@@ -558,7 +707,7 @@ class ActionRunner:
             "generate-comments-bulk",
             "paste-comments-bulk",
         }:
-            return self._run_bulk(payload, environment)
+            return self._run_bulk(payload, environment, job=job)
 
         attachment_ids = self._attachment_ids(payload)
         with TemporaryDirectory(
@@ -577,36 +726,40 @@ class ActionRunner:
                         payload,
                         attachment_paths=attachment_paths,
                     )
+                    if job is not None:
+                        rows = payload.get("rows")
+                        job["total"] = len(rows) if isinstance(rows, list) else 0
+                        job["label"] = label
+
+                        def _on_row(done: int, total: int) -> None:
+                            job["done"] = done
+                            job["total"] = total
+
+                        job["on_row"] = _on_row
                     try:
-                        completed = subprocess.run(
-                            command,
-                            cwd=PROJECT_DIR,
-                            capture_output=True,
-                            text=True,
-                            encoding="utf-8",
-                            errors="replace",
-                            timeout=ACTION_TIMEOUT_SECONDS,
-                            env=environment,
-                            check=False,
+                        returncode, output, cancelled = self._run_child(
+                            command, environment, label=label, job=job
                         )
-                    except subprocess.TimeoutExpired as exc:
-                        raise FrontendError(
-                            f"{label} timed out after {ACTION_TIMEOUT_SECONDS // 60} minutes."
-                        ) from exc
                     finally:
                         self.store.sync_runtime_workbook()
                 finally:
                     self.store.remove_runtime_workbook()
-
-        stdout = completed.stdout.strip()
-        stderr = completed.stderr.strip()
-        output = "\n".join(part for part in (stdout, stderr) if part)
         if len(output) > 50000:
             output = output[-50000:]
+        if job is not None and cancelled:
+            done = job.get("done", 0)
+            total = job.get("total", 0)
+            return {
+                "ok": True,
+                "cancelled": True,
+                "label": f"{label} — cancelled after {done}/{total}",
+                "returncode": returncode,
+                "output": output,
+            }
         return {
-            "ok": completed.returncode == 0,
+            "ok": returncode == 0,
             "label": label,
-            "returncode": completed.returncode,
+            "returncode": returncode,
             "output": output,
         }
 
@@ -721,6 +874,29 @@ class FrontendHandler(BaseHTTPRequestHandler):
                         "paste_supported": os.name == "nt" or sys.platform == "darwin",
                     },
                 )
+                return
+            if parsed.path == "/api/action/progress":
+                query = parse_qs(parsed.query)
+                job_id = (query.get("id", [""])[0] or "").strip()
+                with ACTION_JOBS_LOCK:
+                    job = ACTION_JOBS.get(job_id)
+                if job is None:
+                    raise FrontendError("That task is no longer tracked.")
+                snapshot: dict[str, Any] = {
+                    "ok": True,
+                    "state": job["state"],
+                    "done": job.get("done", 0),
+                    "total": job.get("total", 0),
+                    "detail": job.get("detail", ""),
+                    "elapsed": round(_time.time() - job["started"], 1),
+                    "error": job.get("error", ""),
+                }
+                if job["state"] != "running":
+                    result = job.get("result") or {}
+                    snapshot["label"] = result.get("label", "")
+                    snapshot["output"] = result.get("output", "")
+                    snapshot["cancelled"] = bool(result.get("cancelled"))
+                self._send_json(200, snapshot)
                 return
             if parsed.path == "/api/sheet":
                 sheet_name = parse_qs(parsed.query).get("name", [""])[0]
@@ -949,8 +1125,44 @@ class FrontendHandler(BaseHTTPRequestHandler):
                 self._send_json(200, {"ok": True, **result})
                 return
             if parsed.path == "/api/action":
-                result = self.runner.run(payload)
-                self._send_json(200 if result["ok"] else 422, result)
+                job = _new_action_job(str(payload.get("action") or "action"))
+                runner = self.runner
+
+                def _worker() -> None:
+                    try:
+                        result = runner.run(payload, job=job)
+                        job["result"] = result
+                        if result.get("cancelled"):
+                            job["state"] = "cancelled"
+                        elif result.get("ok"):
+                            job["state"] = "finished"
+                        else:
+                            job["state"] = "failed"
+                            job["error"] = result.get("label") or "The action failed."
+                    except FrontendError as exc:
+                        job["state"] = "failed"
+                        job["error"] = str(exc)
+                    except Exception as exc:  # surface crashes instead of hanging the poll
+                        job["state"] = "failed"
+                        job["error"] = f"{type(exc).__name__}: {exc}"
+
+                threading.Thread(target=_worker, daemon=True).start()
+                self._send_json(200, {"ok": True, "job_id": job["id"]})
+                return
+            if parsed.path == "/api/action/cancel":
+                job_id = str(payload.get("id") or "")
+                with ACTION_JOBS_LOCK:
+                    job = ACTION_JOBS.get(job_id)
+                if job is None:
+                    raise FrontendError("That task is no longer tracked.")
+                job["cancel"].set()
+                process = job.get("process")
+                if process is not None:
+                    try:
+                        process.terminate()
+                    except Exception:
+                        pass
+                self._send_json(200, {"ok": True})
                 return
             if parsed.path in {"/api/export", "/api/export/report"}:
                 # Writes the file into exports/ and reports its path, without streaming a

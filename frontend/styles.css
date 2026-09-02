@@ -1262,3 +1262,45 @@ textarea.cell-input.is-expanded {
   }
 }
 
+
+.busy-progress {
+  width: min(340px, 78vw);
+  margin-top: 14px;
+}
+
+.progress-track {
+  height: 8px;
+  overflow: hidden;
+  background: var(--line);
+  border-radius: 999px;
+}
+
+.progress-fill {
+  width: 0%;
+  height: 100%;
+  background: var(--teal);
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+
+.progress-fill.is-indeterminate {
+  width: 30%;
+  animation: progress-slide 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes progress-slide {
+  from { margin-left: 0; }
+  to { margin-left: 70%; }
+}
+
+.busy-progress-text {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.busy-cancel {
+  margin-top: 12px;
+}

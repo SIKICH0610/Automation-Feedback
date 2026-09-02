@@ -23,6 +23,7 @@ const state = {
   bulkUnchecked: new Set(),
   checkChannel: "auto",
   busy: false,
+  activeJobId: null,
 };
 
 const CHANNEL_HINTS = {
@@ -95,7 +96,7 @@ function setBusy(busy, title = "Working", detail = "Please keep this window open
   elements.busyTitle.textContent = title;
   elements.busyDetail.textContent = detail;
   document.querySelectorAll("button, input, select, textarea").forEach((control) => {
-    if (control.id === "student-search") return;
+    if (control.id === "student-search" || control.id === "busy-cancel") return;
     control.disabled = busy;
   });
   if (!busy && state.bootstrap && !state.bootstrap.paste_supported) {
@@ -495,16 +496,13 @@ async function runBulkAction(action) {
     await saveAll({ quiet: true });
     setLog(`${spec.log}: ${sheets.join(", ")}...`);
 
-    const result = await api("/api/action", {
-      method: "POST",
-      body: JSON.stringify({
-        action,
-        sheets,
-        channel: state.checkChannel,
-      }),
+    const result = await runActionJob({
+      action,
+      sheets,
+      channel: state.checkChannel,
     });
     setLog(result.output || result.label);
-    toast(result.label);
+    toast(result.label, false);
     await loadSheet(state.sheetName, preservedSelection());
   } catch (error) {
     const output = error.payload?.output || error.message;
@@ -1134,6 +1132,63 @@ function selectedActionRows() {
     .map((row) => Number(row.excel_row));
 }
 
+function formatEta(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "";
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds % 60);
+  return minutes ? `${minutes}分${String(rest).padStart(2, "0")}秒` : `${rest}秒`;
+}
+
+function renderJobProgress(snapshot) {
+  elements.busyProgress.hidden = false;
+  const { done, total, detail, elapsed } = snapshot;
+  const fill = elements.busyProgressFill;
+  if (total > 0) {
+    fill.classList.remove("is-indeterminate");
+    fill.style.width = `${Math.min(100, Math.round((done / total) * 100))}%`;
+    let text = `${done} / ${total}`;
+    if (done >= 2 && done < total) {
+      const eta = formatEta((elapsed / done) * (total - done));
+      if (eta) text += ` · 预计还需 ${eta}`;
+    }
+    if (detail) text += ` · ${detail}`;
+    elements.busyProgressText.textContent = text;
+  } else {
+    fill.classList.add("is-indeterminate");
+    fill.style.width = "30%";
+    elements.busyProgressText.textContent = detail || "";
+  }
+}
+
+// Submits the action as a background job and polls it to completion, driving the
+// progress bar and the cancel button. Resolves with the finished snapshot
+// (state: finished | cancelled) and throws on state: failed.
+async function runActionJob(payload) {
+  const started = await api("/api/action", { method: "POST", body: JSON.stringify(payload) });
+  state.activeJobId = started.job_id;
+  elements.busyCancel.hidden = false;
+  elements.busyCancel.disabled = false;
+  elements.busyCancel.textContent = "取消 Cancel";
+  try {
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      const snapshot = await api(`/api/action/progress?id=${started.job_id}`);
+      renderJobProgress(snapshot);
+      if (snapshot.state === "failed") {
+        const error = new Error(snapshot.error || "The action failed.");
+        error.payload = snapshot;
+        throw error;
+      }
+      if (snapshot.state !== "running") return snapshot;
+    }
+  } finally {
+    state.activeJobId = null;
+    elements.busyCancel.hidden = true;
+    elements.busyProgress.hidden = true;
+    elements.busyProgressFill.style.width = "0%";
+  }
+}
+
 async function runAction(action) {
   const isPaste = action.startsWith("paste-");
   const isGroupChatCheck = action === "check-group-chat";
@@ -1169,19 +1224,16 @@ async function runAction(action) {
     }
 
     setLog(`Running ${action} for rows ${rows.join(", ")}...`);
-    const result = await api("/api/action", {
-      method: "POST",
-      body: JSON.stringify({
-        action,
-        sheet: state.sheetName,
-        rows,
-        quiz_number: state.quizNumber,
-        attachment_ids: attachmentIds,
-        channel: state.checkChannel,
-      }),
+    const result = await runActionJob({
+      action,
+      sheet: state.sheetName,
+      rows,
+      quiz_number: state.quizNumber,
+      attachment_ids: attachmentIds,
+      channel: state.checkChannel,
     });
     setLog(result.output || result.label);
-    toast(result.label);
+    toast(result.label, false);
     await loadSheet(state.sheetName, {
       ids: new Set(),
       rows: new Set(rows),
@@ -1238,6 +1290,19 @@ function bindEvents() {
   elements.exportExcel.addEventListener("click", () => downloadExport("full", "Excel export"));
   elements.exportReport.addEventListener("click", () => downloadExport("report", "Report export"));
   elements.deleteSemester.addEventListener("click", deleteCurrentSemester);
+  elements.busyCancel.addEventListener("click", async () => {
+    if (!state.activeJobId) return;
+    elements.busyCancel.disabled = true;
+    elements.busyCancel.textContent = "正在取消…";
+    try {
+      await api("/api/action/cancel", {
+        method: "POST",
+        body: JSON.stringify({ id: state.activeJobId }),
+      });
+    } catch (error) {
+      toast(error.message, true);
+    }
+  });
   elements.bulkCheck.addEventListener("click", () => runBulkAction("check-group-chat-bulk"));
   elements.bulkGenerate.addEventListener("click", () => runBulkAction("generate-comments-bulk"));
   elements.bulkPaste.addEventListener("click", () => runBulkAction("paste-comments-bulk"));
@@ -1330,6 +1395,10 @@ async function initialize() {
     "bulkCheck",
     "bulkGenerate",
     "bulkPaste",
+    "busyProgress",
+    "busyProgressFill",
+    "busyProgressText",
+    "busyCancel",
     "bulkSummary",
     "channelHint",
     "sheetTabs",

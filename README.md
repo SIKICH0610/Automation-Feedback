@@ -155,7 +155,12 @@ finishes, so WeCom can just sit in the background between runs. WhatsApp is stil
 checked up front and must already be open — the batch stops immediately with a clear
 message if a needed app is unavailable, and never opens anything mid-batch. Waits are adaptive: fast machines move on as soon as WeCom's UI confirms each step,
 slow machines get longer caps than the old fixed delays — budget two to four seconds
-per student depending on the machine.
+per student depending on the machine. Long runs show a live progress bar with an
+estimated time remaining and a **Cancel** button — cancelling stops after the row in
+flight, keeps everything already written, and still tucks WeCom away. The automation
+itself must stay in the foreground while it runs: it works by sending real keystrokes,
+and macOS delivers those only to the frontmost window, so true background operation is
+not possible with this approach.
 
 ## Managing the roster
 
