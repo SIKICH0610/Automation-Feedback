@@ -112,25 +112,15 @@
               <button class="segment" data-mode="quiz2" type="button">Quiz 2</button>
             </div>
             <div class="section-heading">
-              <div>
-                <p class="eyebrow">Used as paragraph 1</p>
-                <h2 id="recap-title">Lesson recap 本节课内容回顾</h2>
-              </div>
+              <h2 id="recap-title" class="has-tip">本节课内容回顾</h2>
               <button id="save-recap" class="button secondary small" type="button">Save</button>
             </div>
-            <textarea id="recap-text" rows="5" placeholder="本节课内容回顾，例如：今天的课程主要围绕三角形全等的判定、勾股定理的应用展开"></textarea>
-            <p class="field-hint" id="recap-hint">
-              Used verbatim after the greeting: comments open “家长您好～” followed by
-              exactly what you write here. Left empty, a generic recap sentence fills in.
-            </p>
+            <textarea id="recap-text" rows="5" placeholder="例如：今天的课程主要围绕三角形全等的判定、勾股定理的应用展开"></textarea>
             <div id="closing-block">
               <div class="section-heading">
-                <div>
-                  <p class="eyebrow">Used as paragraph 3</p>
-                  <h2 id="closing-title">Closing 第三段（作业与结尾）</h2>
-                </div>
+                <h2 id="closing-title" class="has-tip" title="生成评语的第三段。留空使用默认模板（作业说明＋结束语）；填写则你的文字原样作为第三段，学生各自的作业反馈仍会附加在后面。">作业与结尾</h2>
               </div>
-              <textarea id="closing-text" rows="3" placeholder="留空使用默认（作业说明＋结束语）；填写则原样作为第三段"></textarea>
+              <textarea id="closing-text" rows="3" placeholder="留空用默认模板；填写则原样作为第三段"></textarea>
             </div>
             <button id="action-generate" class="action-button generate" type="button">
               <span>Generate 生成</span>
@@ -144,10 +134,7 @@
 
           <section id="rail-announce" class="rail-panel side-section" aria-label="Announcement" hidden>
             <div class="section-heading">
-              <div>
-                <p class="eyebrow">Linked content</p>
-                <h2 id="announcement-title">Announcement</h2>
-              </div>
+              <h2 id="announcement-title" class="has-tip" title="面向全班群发的公告文字和附件，与逐个学生的反馈无关。粘贴时对每个选中学生的聊天各贴一份，不会自动发送。">Announcement 公告</h2>
               <button id="save-announcement" class="button secondary small" type="button">Save</button>
             </div>
             <textarea id="announcement-text" rows="10" placeholder="Write the class announcement or course description here"></textarea>
@@ -168,45 +155,34 @@
             </div>
             <div id="attachment-list" class="attachment-list"></div>
             <p id="attachment-empty" class="attachment-empty">No files uploaded for this class.</p>
-            <button class="action-button paste" data-action="paste-announcement" type="button">
+            <button class="action-button paste" data-action="paste-announcement" type="button" title="把公告文字和勾选的附件粘贴到每个选中学生的聊天里，不会自动发送。">
               <span>Paste announcement</span>
-              <small>Shared text and selected files</small>
             </button>
           </section>
 
           <section id="rail-bulk" class="rail-panel side-section" aria-label="Bulk" hidden>
             <div class="section-heading">
-              <div>
-                <p class="eyebrow" id="bulk-scope">Whole semester</p>
-                <h2 id="bulk-title">Bulk actions 跨班级</h2>
-              </div>
+              <h2 id="bulk-title" class="has-tip" title="对勾选班级的全部学生运行（当前学期），与表格里选中的行无关。开始前会自动唤出企业微信，结束后自动收回。">Bulk actions 跨班级</h2>
               <button id="bulk-toggle-all" class="text-button" type="button">None</button>
             </div>
-            <p class="bulk-hint">
-              Runs on every student of the ticked class rosters, not just the rows selected above.
-            </p>
             <div class="channel-row">
               <p class="group-label">Search in</p>
-              <div class="segmented-control" aria-label="Which app to search">
+              <div id="channel-switch" class="segmented-control" aria-label="Which app to search">
                 <button class="channel-segment is-active" data-channel="auto" type="button">Auto</button>
                 <button class="channel-segment" data-channel="wecom" type="button">WeCom</button>
                 <button class="channel-segment" data-channel="whatsapp" type="button">WhatsApp</button>
               </div>
             </div>
-            <p id="channel-hint" class="bulk-hint"></p>
             <div id="bulk-class-list" class="bulk-class-list"></div>
             <p id="bulk-summary" class="bulk-hint">0 students</p>
-            <button id="bulk-generate" class="action-button generate" type="button">
+            <button id="bulk-generate" class="action-button generate" type="button" title="为勾选班级的每个学生重新生成评语，覆盖 Feedback 列（每个班用自己的回顾和结尾）。">
               <span>Generate comments</span>
-              <small>Overwrites Feedback for every ticked roster</small>
             </button>
-            <button id="bulk-check" class="action-button paste" type="button">
+            <button id="bulk-check" class="action-button paste" type="button" title="按上面选的渠道逐个学生查群聊，把结果写进 Group Chat 列，不会打开或发送消息。">
               <span>Check group chats</span>
-              <small>Uses the channel picked above</small>
             </button>
-            <button id="bulk-paste" class="action-button paste" type="button">
+            <button id="bulk-paste" class="action-button paste" type="button" title="逐个学生把 Feedback 粘贴进聊天框，停在预览，绝不自动发送。">
               <span>Paste comments</span>
-              <small>Pastes each student's Feedback, never sends</small>
             </button>
           </section>
 

@@ -390,7 +390,7 @@ function renderChannelChoice() {
   document.querySelectorAll(".channel-segment").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.channel === state.checkChannel);
   });
-  if (elements.channelHint) elements.channelHint.textContent = CHANNEL_HINTS[state.checkChannel];
+  if (elements.channelSwitch) elements.channelSwitch.title = CHANNEL_HINTS[state.checkChannel];
 }
 
 function bulkSelectedSheets() {
@@ -417,7 +417,6 @@ function renderBulkSummary() {
 function renderBulkClasses() {
   const groups = sheetGroups();
   const group = groups[activeGroupIndex(groups)];
-  elements.bulkScope.textContent = group ? group.semester || "Other Classes" : "No classes";
   elements.bulkClassList.replaceChildren();
 
   const sheets = group ? group.sheets : [];
@@ -945,29 +944,29 @@ function renderSelection() {
 // box is editing and which columns the actions target.
 const MODE_META = {
   general: {
-    title: "Lesson recap 本节课内容回顾",
+    title: "本节课内容回顾",
+    tooltip: "生成评语的第一段。开头自动加“家长您好～”，你写的内容原样跟在后面；留空则用一句通用回顾。",
     column: "Feedback",
     view: "general",
-    placeholder: "本节课内容回顾，例如：今天的课程主要围绕三角形全等的判定、勾股定理的应用展开",
-    hint: "Used verbatim after the greeting: comments open “家长您好～” followed by exactly what you write here. Left empty, a generic recap sentence fills in.",
+    placeholder: "例如：今天的课程主要围绕三角形全等的判定、勾股定理的应用展开",
     generate: "generate-comments",
     paste: "paste-comments",
   },
   quiz1: {
-    title: "Quiz 1 recap 本次 quiz 回顾",
+    title: "Quiz 1 回顾",
+    tooltip: "Quiz 1 反馈的第一段，只用于 Quiz 1 的消息。每次 quiz 各自保存一份回顾。",
     column: "Quiz1 Feedback",
     view: "quiz1",
     placeholder: "本次 quiz 的范围和整体情况，例如：满分 8 分，7 道选择 + 1 道证明，班级平均 6.9/8",
-    hint: "Used as paragraph 1 of this quiz's feedback. Each quiz keeps its own recap.",
     generate: "generate-quiz-feedback",
     paste: "paste-quiz-feedback",
   },
   quiz2: {
-    title: "Quiz 2 recap 本次 quiz 回顾",
+    title: "Quiz 2 回顾",
+    tooltip: "Quiz 2 反馈的第一段，只用于 Quiz 2 的消息。每次 quiz 各自保存一份回顾。",
     column: "Quiz2 Feedback",
     view: "quiz2",
     placeholder: "本次 quiz 的范围和整体情况，例如：4 道题 + 1 道 bonus，班级平均 6.4/9",
-    hint: "Used as paragraph 1 of this quiz's feedback. Each quiz keeps its own recap.",
     generate: "generate-quiz-feedback",
     paste: "paste-quiz-feedback",
   },
@@ -987,8 +986,8 @@ function renderMode() {
     button.classList.toggle("is-active", button.dataset.mode === state.contentMode);
   });
   elements.recapTitle.textContent = meta.title;
+  elements.recapTitle.title = meta.tooltip;
   elements.recapText.placeholder = meta.placeholder;
-  elements.recapHint.textContent = meta.hint;
   elements.recapText.value = state.recaps[recapKey()] || "";
   elements.generateTarget.textContent = `Writes to ${meta.column}`;
   elements.closingBlock.hidden = state.contentMode !== "general";
@@ -1515,7 +1514,6 @@ async function initialize() {
     "saveState",
     "semesterSelect",
     "deleteSemester",
-    "bulkScope",
     "bulkClassList",
     "bulkToggleAll",
     "bulkCheck",
@@ -1526,7 +1524,7 @@ async function initialize() {
     "busyProgressText",
     "busyCancel",
     "bulkSummary",
-    "channelHint",
+    "channelSwitch",
     "sheetTabs",
     "columnView",
     "studentSearch",
@@ -1557,7 +1555,6 @@ async function initialize() {
     "attachmentList",
     "attachmentEmpty",
     "recapTitle",
-    "recapHint",
     "closingBlock",
     "closingText",
     "generateTarget",

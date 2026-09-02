@@ -1422,3 +1422,9 @@ textarea.cell-input.is-expanded {
   padding: 8px 10px;
   resize: vertical;
 }
+
+.has-tip {
+  cursor: help;
+  text-decoration: underline dotted var(--line-strong);
+  text-underline-offset: 4px;
+}
