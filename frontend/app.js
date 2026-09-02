@@ -27,10 +27,25 @@ const state = {
 };
 
 const CHANNEL_HINTS = {
-  auto: "Uses each student's own channel, and when they have none set, tries WeCom then WhatsApp — filling in Parent Language from whichever one matched.",
+  auto: "WhatsApp 维护中：Auto 目前只检查 WeCom。恢复后将按学生自己的渠道路由。",
   wecom: "Searches WeCom only. Parent Language is left alone, since forcing a channel says nothing about which language a family uses.",
-  whatsapp: "Searches WhatsApp only. Parent Language is left alone.",
+  whatsapp: "WhatsApp 功能维护中，暂不可用。",
 };
+
+// Temporary maintenance gate: WhatsApp checking is offline for now. Auto quietly
+// downgrades to WeCom-only (with a notice); an explicit WhatsApp run is refused.
+// Delete this function and its two call sites to restore WhatsApp.
+function applyWhatsappMaintenance(channel) {
+  if (channel === "whatsapp") {
+    toast("WhatsApp 功能维护中，本次操作已取消。", true);
+    return null;
+  }
+  if (channel === "auto") {
+    toast("WhatsApp 维护中，本次仅检查 WeCom。");
+    return "wecom";
+  }
+  return channel;
+}
 
 const elements = {};
 
@@ -486,6 +501,11 @@ async function runBulkAction(action) {
     toast("Tick at least one class first.", true);
     return;
   }
+  let channel = state.checkChannel;
+  if (action === "check-group-chat-bulk") {
+    channel = applyWhatsappMaintenance(channel);
+    if (channel === null) return;
+  }
   const groups = sheetGroups();
   const group = groups[activeGroupIndex(groups)] || { student_counts: {} };
   const counts = group.student_counts || {};
@@ -502,7 +522,7 @@ async function runBulkAction(action) {
     const result = await runActionJob({
       action,
       sheets,
-      channel: state.checkChannel,
+      channel,
     });
     setLog(result.output || result.label);
     toast(result.label, false);
@@ -1378,6 +1398,9 @@ function bindEvents() {
   document.querySelectorAll(".channel-segment").forEach((button) => {
     button.addEventListener("click", () => {
       state.checkChannel = button.dataset.channel;
+      if (button.dataset.channel === "whatsapp") {
+        toast("WhatsApp 功能维护中，该选项暂时无法运行。", true);
+      }
       renderChannelChoice();
     });
   });

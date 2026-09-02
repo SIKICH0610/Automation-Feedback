@@ -1326,6 +1326,8 @@ textarea.cell-input.is-expanded {
 }
 
 .rail-panel .action-button {
+  display: block;
+  width: 100%;
   margin-top: 8px;
 }
 
@@ -1411,4 +1413,12 @@ textarea.cell-input.is-expanded {
 
 .overflow-item.is-danger:hover {
   background: var(--red-soft);
+}
+
+/* Rail textareas span the panel edge to edge, same as the action buttons. */
+.rail-panel textarea {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  resize: vertical;
 }
