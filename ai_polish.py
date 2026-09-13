@@ -108,6 +108,17 @@ def _memory_bytes() -> int:
     return 8 * 1024**3
 
 
+_STATUS_CACHE: dict[str, Any] = {"at": 0.0, "value": None}
+
+
+def ai_status_cached(ttl: float = 60.0) -> dict[str, Any]:
+    now = time.time()
+    if _STATUS_CACHE["value"] is None or now - _STATUS_CACHE["at"] > ttl:
+        _STATUS_CACHE["value"] = ai_status()
+        _STATUS_CACHE["at"] = now
+    return _STATUS_CACHE["value"]
+
+
 def ai_status() -> dict[str, Any]:
     """What the frontend needs to decide whether to show the buttons."""
     if not ollama_available():
@@ -130,7 +141,50 @@ def ai_status() -> dict[str, Any]:
 
 # --- tone examples -------------------------------------------------------------
 
-def tone_examples(store: Any, keywords: str, *, limit: int = 3) -> list[str]:
+def _examples_from_rows(rows_texts: list[str], keywords: str, limit: int) -> list[str]:
+    candidates = []
+    for text in rows_texts:
+        text = str(text or "").strip()
+        if not text or _DIGITS.search(text):
+            continue
+        if not 15 <= len(text) <= 120:
+            continue
+        candidates.append(text)
+    if not candidates:
+        return _FALLBACK_EXAMPLES[:limit]
+    unique = list(dict.fromkeys(candidates))
+    key_chars = set(keywords)
+    unique.sort(key=lambda example: len(key_chars & set(example)), reverse=True)
+    return unique[:limit]
+
+
+def _runtime_tone_texts() -> list[str]:
+    """Additional Comment texts straight from the database named by
+    FEEDBACK_DATABASE_PATH -- the worker subprocess has no store object."""
+    import os
+    import sqlite3
+
+    path = os.environ.get("FEEDBACK_DATABASE_PATH", "").strip()
+    if not path:
+        return []
+    try:
+        connection = sqlite3.connect(path)
+        try:
+            rows = connection.execute("SELECT values_json FROM students").fetchall()
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        return []
+    texts = []
+    for (raw,) in rows:
+        try:
+            texts.append(str(json.loads(raw).get("Additional Comment") or ""))
+        except (json.JSONDecodeError, AttributeError):
+            continue
+    return texts
+
+
+def tone_examples(store: Any, keywords: str, *, limit: int = 4) -> list[str]:
     """A few of the teacher's own parent-facing lines, as style examples.
 
     Pulled live from this machine's own database (Additional Comment column),
@@ -138,29 +192,17 @@ def tone_examples(store: Any, keywords: str, *, limit: int = 3) -> list[str]:
     stripped when these were written; digit-bearing lines are skipped so the
     examples never invite the model to invent numbers.
     """
-    candidates: list[str] = []
-    try:
-        for sheet_name in store.sheet_names():
-            for row in store.load_sheet(sheet_name)["rows"]:
-                text = str(row["values"].get("Additional Comment") or "").strip()
-                if not text or _DIGITS.search(text):
-                    continue
-                if not 15 <= len(text) <= 120:
-                    continue
-                candidates.append(text)
-    except Exception:
-        candidates = []
-    if not candidates:
-        return _FALLBACK_EXAMPLES[:limit]
-
-    unique = list(dict.fromkeys(candidates))
-    key_chars = set(keywords)
-
-    def overlap(example: str) -> int:
-        return len(key_chars & set(example))
-
-    unique.sort(key=overlap, reverse=True)
-    return unique[:limit]
+    texts: list[str] = []
+    if store is not None:
+        try:
+            for sheet_name in store.sheet_names():
+                for row in store.load_sheet(sheet_name)["rows"]:
+                    texts.append(str(row["values"].get("Additional Comment") or ""))
+        except Exception:
+            texts = []
+    else:
+        texts = _runtime_tone_texts()
+    return _examples_from_rows(texts, keywords, limit)
 
 
 # Neutral, de-identified fallbacks for a fresh machine with no comments yet.
@@ -179,13 +221,15 @@ def _prompt_student(keywords: str, examples: list[str]) -> str:
         "你是 Think Academy 的数学老师，正在给家长写孩子的课堂反馈。\n"
         "下面是你平时写反馈的语气示例：\n"
         f"{sample_lines}\n\n"
-        "现在把这些关键词扩写成一段发给家长的话，2 到 3 句、60 到 90 个字：\n"
+        "现在把这些关键词扩写成一段发给家长的话，3 到 4 句、90 到 130 个字：\n"
         f"关键词：{keywords}\n\n"
         "硬性要求：\n"
         "- 只能使用关键词里给出的事实，绝对不能编造成绩、名次或具体事件\n"
         "- 不要写学生姓名，不要任何称呼\n"
         "- 不要写“家长您好”，也不要写结尾问候（模板会自动加）\n"
-        "- 语气亲切自然，多数句子以“～”结尾\n"
+        "- 语气亲切自然、有温度，像老师平时跟家长聊天；"
+        "可以在事实基础上加一点具体的肯定和下一步的小建议，但不得引入新事实\n"
+        "- 多数句子以“～”结尾\n"
         "只输出扩写后的这段话。"
     )
 
@@ -203,6 +247,26 @@ def _looks_like_keywords(text: str) -> bool:
     if any(mark in stripped for mark in "。！？～!?"):
         return False
     return len(stripped) <= 32
+
+
+def _prompt_student_rewrite(material: str, examples: list[str]) -> str:
+    sample_lines = "\n".join(f"- {example}" for example in examples)
+    return (
+        "你是 Think Academy 的数学老师。下面是你课上记的关于一个学生的速记，"
+        "现在要把它改写成一段发给家长的话。\n"
+        "你平时写给家长的语气示例：\n"
+        f"{sample_lines}\n\n"
+        f"课堂速记：{material}\n\n"
+        "硬性要求：\n"
+        "- 必须完全用自己的话重新表达，禁止照抄速记里的任何整句；"
+        "速记里的错别字和内部说法（如“需要他……”）要转成家长易读的表达"
+        "（如“接下来可以在……上多加练习～”）\n"
+        "- 速记里的每个事实和建议都要保留，但绝不能添加速记里没有的事实\n"
+        "- 3 到 4 句、90 到 130 个字\n"
+        "- 不要写学生姓名，不要称呼，不要问候和结尾（模板会加）\n"
+        "- 语气亲切自然，多数句子以“～”结尾\n"
+        "只输出改写后的这段话。"
+    )
 
 
 def _prompt_recap(keywords: str) -> str:
@@ -286,7 +350,14 @@ def expand(kind: str, text: str, store: Any) -> dict[str, Any]:
 
     guard_kind = kind
     if kind == "student":
-        prompt = _prompt_student(source, tone_examples(store, source))
+        examples = tone_examples(store, source)
+        # Terse keywords get expanded; sentence-like shorthand gets a mandatory
+        # rewrite -- fed prose, the model's instinct is to echo it back verbatim,
+        # internal phrasing, typos and all.
+        if _looks_like_keywords(source) or len(source) <= 45:
+            prompt = _prompt_student(source, examples)
+        else:
+            prompt = _prompt_student_rewrite(source, examples)
     elif kind == "recap":
         if _looks_like_keywords(source):
             prompt = _prompt_recap(source)

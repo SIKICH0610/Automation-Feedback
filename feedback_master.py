@@ -39,6 +39,10 @@ class FeedbackGenerator:
     # Optional hand-written paragraph 3; empty keeps the default homework note +
     # closing sentence. Quiz-only messages ignore it.
     closing_note: str = ""
+    # When True, the personal paragraph of Chinese general comments is written by
+    # the local AI from the row's raw material (remark + observations + additional
+    # comment), in the teacher's own voice; any failure falls back to the template.
+    ai_polish: bool = False
     # "1" / "2" when the teacher picked a quiz in the UI; None lets the row's own
     # data decide, which is all the CLI and comprehensive feedback can do.
     quiz_number: str | None = None
@@ -58,11 +62,42 @@ class FeedbackGenerator:
         return class_review_paragraph(self.class_review, self.is_chinese(student), kind=kind)
 
     def general_personal_paragraph(self, student: StudentRow) -> str:
+        ai_text = self._ai_personal_paragraph(student)
+        if ai_text:
+            return ai_text
         return general_comment_paragraph(
             student,
             self.observations_for_student(student),
             self.is_chinese(student),
         )
+
+    def _ai_personal_paragraph(self, student: StudentRow) -> str | None:
+        """AI-written personal paragraph, or None to use the template.
+
+        Chinese rows only for now, and only when there is real material to work
+        from -- an empty row would just invite invention. Every failure path is a
+        silent fallback: generation must never break because a model hiccuped.
+        """
+        if not self.ai_polish or not self.is_chinese(student):
+            return None
+        remark = str(student.values.get("Remark for Student") or "").strip()
+        additional = str(student.values.get("Additional Comment") or "").strip()
+        observations = self.observations_for_student(student)
+        parts = [part for part in (remark, "，".join(observations), additional) if part]
+        if not parts:
+            return None
+        material = "；".join(parts)
+        try:
+            from ai_polish import expand
+
+            result = expand("student", material, None)
+        except Exception:
+            return None
+        if not result.get("ok"):
+            print(f"AI polish fell back to template: {result.get('error', 'unknown')}")
+            return None
+        name = student.first_name or student.full_name
+        return f"{name} {result['text']}"
 
     def quiz_personal_paragraph(self, student: StudentRow) -> str:
         quiz_comment = quiz_comment_paragraph(
@@ -149,9 +184,11 @@ def generate_feedback(
     feedback_type: str = "comprehensive",
     quiz_number: str | None = None,
     closing_note: str = "",
+    ai_polish: bool = False,
 ) -> str | None:
     return FeedbackGenerator(
         class_review=class_review,
         quiz_number=quiz_number,
         closing_note=closing_note,
+        ai_polish=ai_polish,
     ).generate(student, feedback_type=feedback_type)

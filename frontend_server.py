@@ -204,6 +204,7 @@ class ActionRunner:
         ]
 
         if action == "generate-comments":
+            ai_args = ["--ai-polish"] if ai_polish.ai_status_cached()["available"] else []
             return [
                 *worker_command("feedback_generator"),
                 *common,
@@ -213,6 +214,7 @@ class ActionRunner:
                 "--feedback-column",
                 "Feedback",
                 *class_review_args,
+                *ai_args,
             ], "Generated comments"
 
         if action == "paste-announcement":
@@ -437,6 +439,7 @@ class ActionRunner:
                         ",".join(str(row) for row in sorted(rows)),
                     ]
                     if action == "generate-comments-bulk":
+                        ai_args = ["--ai-polish"] if ai_polish.ai_status_cached()["available"] else []
                         command = [
                             *worker_command("feedback_generator"),
                             *common,
@@ -450,6 +453,7 @@ class ActionRunner:
                             self.store.read_lesson_recap(sheet_name),
                             "--closing-note",
                             self.store.read_closing_note(sheet_name),
+                            *ai_args,
                         ]
                     elif action == "paste-comments-bulk":
                         command = [

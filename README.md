@@ -135,6 +135,13 @@ buttons appear; without Ollama they stay hidden and nothing else changes:
 - **AI 润色** on the announcement: sentence-conservative polish that never touches
   facts.
 
+When Ollama is available, **Generate comments automatically writes the personal
+paragraph with the AI** for Chinese rows that have real material (remark /
+observations / additional comment) — teacher shorthand is rewritten into
+parent-facing wording, never echoed — with the template as the fallback for empty
+rows, English rows, and any AI failure. Expect a few seconds per student instead of
+an instant run; the progress bar tracks each row.
+
 Every draft passes a fact guard — no digits may appear that the teacher didn't type,
 an announcement may not lose one, and invented temporal glosses ("考试结束后…") are
 rejected — with one automatic retry, then a clear refusal. Drafts land in the input

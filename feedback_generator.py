@@ -223,6 +223,11 @@ def build_parser(*, default_feedback_type: str = "comprehensive") -> argparse.Ar
         help="Optional Chinese class review file for Chinese parent messages.",
     )
     parser.add_argument(
+        "--ai-polish",
+        action="store_true",
+        help="Write Chinese personal paragraphs with the local AI (template on any failure).",
+    )
+    parser.add_argument(
         "--closing-note",
         default="",
         help="Hand-written paragraph 3. Empty keeps the default homework note + closing.",
@@ -336,7 +341,9 @@ def main(*, default_feedback_type: str = "comprehensive") -> None:
     generated = 0
     skipped = 0
     review_rows: list[dict[str, str]] = []
-    for student in students:
+    total_rows = len(students)
+    for row_index, student in enumerate(students, start=1):
+        print(f"Batch item {row_index}/{total_rows}", flush=True)
         student_class_review = (
             class_review_zh if student.language.lower().startswith("chinese") else class_review_en
         )
@@ -347,6 +354,7 @@ def main(*, default_feedback_type: str = "comprehensive") -> None:
             feedback_type=args.feedback_type,
             quiz_number=args.quiz_number,
             closing_note=args.closing_note,
+            ai_polish=args.ai_polish,
         )
         print_student_result(student, feedback)
 
