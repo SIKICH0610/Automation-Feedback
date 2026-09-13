@@ -44,6 +44,10 @@ _DIGITS = re.compile(r"\d+")
 # rejected mechanically instead of argued with.
 _INFERENTIAL_MARKERS = ("结束后", "结束前", "开始前", "开始后")
 
+# Every message goes point-to-point to ONE family, so group address forms are
+# banned outright in drafts -- prompting alone does not hold (learned repeatedly).
+_PLURAL_MARKERS = ("家长们", "各位家长", "各位同学", "各位家长朋友")
+
 
 def _http_json(path: str, payload: dict[str, Any] | None = None, *, timeout: float) -> Any:
     url = f"{OLLAMA_BASE}{path}"
@@ -230,6 +234,7 @@ def _prompt_student(keywords: str, examples: list[str]) -> str:
         "- 语气亲切自然、有温度，像老师平时跟家长聊天；"
         "可以在事实基础上加一点具体的肯定和下一步的小建议，但不得引入新事实\n"
         "- 多数句子以“～”结尾\n"
+        "- 这条消息只发给一位家长、只谈这一个孩子：绝不能出现“孩子们”“同学们”“各位”“大家”等群体称呼\n"
         "只输出扩写后的这段话。"
     )
 
@@ -265,6 +270,7 @@ def _prompt_student_rewrite(material: str, examples: list[str]) -> str:
         "- 3 到 4 句、90 到 130 个字\n"
         "- 不要写学生姓名，不要称呼，不要问候和结尾（模板会加）\n"
         "- 语气亲切自然，多数句子以“～”结尾\n"
+        "- 这条消息只发给一位家长、只谈这一个孩子：绝不能出现“孩子们”“同学们”“各位”“大家”等群体称呼\n"
         "只输出改写后的这段话。"
     )
 
@@ -277,6 +283,7 @@ def _prompt_recap(keywords: str) -> str:
         "- 一句话，30 到 60 个字，句式类似“今天的课程主要围绕……展开”\n"
         "- 只能提到给出的知识点，不能添加其他内容\n"
         "- 不要写“家长您好”（模板会加），句尾用“～”\n"
+        "- 这条消息只发给一位家长、只谈这一个孩子：绝不能出现“孩子们”“同学们”“各位”“大家”等群体称呼\n"
         "只输出这句话。"
     )
 
@@ -289,7 +296,8 @@ def _prompt_recap_polish(text: str) -> str:
         "- 时态绝对不能变：原文说“将开始”“下节课”“即将”的内容是还没学的，"
         "绝不能写成已经学过；已经学过的也不能写成将要学\n"
         "- 不得添加原文没有的内容或解释\n"
-        "- 只调整用词和语气，让句子更通顺，句尾多用“～”\n\n"
+        "- 只调整用词和语气，让句子更通顺，句尾多用“～”\n"
+        "- 这条消息只发给一位家长、只谈这一个孩子：绝不能出现“孩子们”“同学们”“各位”“大家”等群体称呼\n""\n"
         f"原文：\n{text}\n\n"
         "直接输出润色后的全文，不要任何解释。"
     )
@@ -314,6 +322,9 @@ def fact_guard(kind: str, source: str, draft: str) -> str:
     announcement additionally may never LOSE one, nor introduce a temporal
     relation ("考试结束后...") the source never stated.
     """
+    plural = [m for m in _PLURAL_MARKERS if m in draft]
+    if plural:
+        return f"草稿使用了群体称呼“{plural[0]}”（消息都是一对一发送的）"
     source_digits = _DIGITS.findall(source)
     draft_digits = _DIGITS.findall(draft)
     added = [d for d in set(draft_digits) if draft_digits.count(d) > source_digits.count(d)]
@@ -327,6 +338,27 @@ def fact_guard(kind: str, source: str, draft: str) -> str:
         if invented:
             return f"草稿添加了原文没有的时间推断“{invented[0]}”"
     return ""
+
+
+# Stock officialese the model keeps producing no matter the prompt. These sentences
+# carry no facts, so deleting them outright is safe.
+_STOCK_COURTESY = re.compile(
+    r"[^。！？!?～~\n]*(?:感谢您的配合|感谢配合|敬请谅解|特此通知|望周知)[^。！？!?～~\n]*[。！？!?～~]?"
+)
+
+# Point-to-point messages: plural nouns downgrade deterministically instead of
+# burning a retry (the model writes 同学们 whenever the material mentions 同学).
+_PLURAL_DOWNGRADES = (("孩子们", "孩子"), ("同学们", "同学"), ("学生们", "学生"))
+
+
+def _sanitize_draft(draft: str) -> str:
+    text = _STOCK_COURTESY.sub("", draft)
+    for plural, singular in _PLURAL_DOWNGRADES:
+        text = text.replace(plural, singular)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    # 模型偶尔把句号和波浪号叠在一起（“。～”）
+    text = text.replace("。～", "～").replace("！～", "～")
+    return text.strip()
 
 
 def _strip_wrapping(draft: str) -> str:
@@ -396,7 +428,7 @@ def expand(kind: str, text: str, store: Any) -> dict[str, Any]:
         except Exception as exc:
             return {"ok": False, "error": f"本地模型调用失败：{exc}"}
 
-        draft = _strip_wrapping(str(data.get("response") or ""))
+        draft = _sanitize_draft(_strip_wrapping(str(data.get("response") or "")))
         if not draft:
             last_reason = "输出为空"
             continue

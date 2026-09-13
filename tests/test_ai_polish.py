@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from ai_polish import _looks_like_keywords, _strip_wrapping, fact_guard, tone_examples
+from ai_polish import _looks_like_keywords, _sanitize_draft, _strip_wrapping, fact_guard, tone_examples
 
 
 class FakeStore:
@@ -54,6 +54,20 @@ class ToneExamplesTest(unittest.TestCase):
 
     def test_falls_back_when_no_local_corpus(self):
         self.assertTrue(len(tone_examples(FakeStore([]), "任意")) > 0)
+
+
+class PluralGuardTest(unittest.TestCase):
+    def test_sanitizer_downgrades_noun_plurals(self):
+        self.assertEqual(_sanitize_draft("孩子们上课很认真，和同学们讨论积极～"), "孩子上课很认真，和同学讨论积极～")
+
+    def test_sanitizer_removes_stock_courtesy(self):
+        self.assertEqual(_sanitize_draft("请周四前提交作业。感谢您的配合！"), "请周四前提交作业。")
+
+    def test_unfixable_group_address_is_rejected(self):
+        self.assertIn("各位家长", fact_guard("announce", "带三角板", "各位家长请注意带三角板"))
+
+    def test_singular_rewrite_passes(self):
+        self.assertEqual(fact_guard("announce", "请同学们带三角板", "请帮孩子备好三角板～"), "")
 
 
 class KeywordDetectionTest(unittest.TestCase):

@@ -1072,8 +1072,8 @@ function attachCellAiButton(editor, column, row) {
     button = document.createElement("button");
     button.type = "button";
     button.className = "button secondary small ai-button cell-ai-button";
-    button.textContent = "AI 扩写";
-    button.title = "把格子里的关键词扩写成一小段家长反馈（本地 AI，生成后请过目修改）";
+    button.textContent = "AI 润色";
+    button.title = "关键词或速记润色成一小段家长反馈（本地 AI，生成后请过目修改）";
     // mousedown would blur the textarea and collapse the editor before click.
     button.addEventListener("mousedown", (event) => event.preventDefault());
     button.addEventListener("click", async () => {
@@ -1093,7 +1093,7 @@ function attachCellAiButton(editor, column, row) {
       } catch (error) {
         toast(error.message, true);
       } finally {
-        button.textContent = "AI 扩写";
+        button.textContent = "AI 润色";
         button.disabled = false;
         editor.focus();
       }
