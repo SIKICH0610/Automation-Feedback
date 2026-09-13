@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from ai_polish import _strip_wrapping, fact_guard, tone_examples
+from ai_polish import _looks_like_keywords, _strip_wrapping, fact_guard, tone_examples
 
 
 class FakeStore:
@@ -54,6 +54,17 @@ class ToneExamplesTest(unittest.TestCase):
 
     def test_falls_back_when_no_local_corpus(self):
         self.assertTrue(len(tone_examples(FakeStore([]), "任意")) > 0)
+
+
+class KeywordDetectionTest(unittest.TestCase):
+    def test_short_bare_topics_are_keywords(self):
+        self.assertTrue(_looks_like_keywords("等腰三角形 三线合一 课堂练习"))
+
+    def test_finished_prose_is_not(self):
+        self.assertFalse(_looks_like_keywords(
+            "家长您好～我们现在已经完成了前两讲的学习，第三节课将开始全等三角形～"
+        ))
+        self.assertFalse(_looks_like_keywords("今天复习了圆的性质。"))
 
 
 class StripWrappingTest(unittest.TestCase):

@@ -190,6 +190,21 @@ def _prompt_student(keywords: str, examples: list[str]) -> str:
     )
 
 
+def _looks_like_keywords(text: str) -> bool:
+    """Keywords vs. already-written prose decides expand vs. polish.
+
+    A finished recap fed to the expander used to get lossily squeezed into the
+    one-line template -- "第三节课将开始学全等" even came out as already taught.
+    Prose gets a conservative polish instead.
+    """
+    stripped = text.strip()
+    if "家长" in stripped:
+        return False
+    if any(mark in stripped for mark in "。！？～!?"):
+        return False
+    return len(stripped) <= 32
+
+
 def _prompt_recap(keywords: str) -> str:
     return (
         "你是 Think Academy 的数学老师，要写一句发给家长的本节课内容回顾。\n"
@@ -199,6 +214,20 @@ def _prompt_recap(keywords: str) -> str:
         "- 只能提到给出的知识点，不能添加其他内容\n"
         "- 不要写“家长您好”（模板会加），句尾用“～”\n"
         "只输出这句话。"
+    )
+
+
+def _prompt_recap_polish(text: str) -> str:
+    return (
+        "逐句润色下面这段老师已经写好的课程回顾。\n\n"
+        "规则：\n"
+        "- 保留全部信息点，一条都不能丢，也不能压缩合并\n"
+        "- 时态绝对不能变：原文说“将开始”“下节课”“即将”的内容是还没学的，"
+        "绝不能写成已经学过；已经学过的也不能写成将要学\n"
+        "- 不得添加原文没有的内容或解释\n"
+        "- 只调整用词和语气，让句子更通顺，句尾多用“～”\n\n"
+        f"原文：\n{text}\n\n"
+        "直接输出润色后的全文，不要任何解释。"
     )
 
 
@@ -255,10 +284,17 @@ def expand(kind: str, text: str, store: Any) -> dict[str, Any]:
         return {"ok": False, "error": status["hint"]}
     model = status["model"]
 
+    guard_kind = kind
     if kind == "student":
         prompt = _prompt_student(source, tone_examples(store, source))
     elif kind == "recap":
-        prompt = _prompt_recap(source)
+        if _looks_like_keywords(source):
+            prompt = _prompt_recap(source)
+        else:
+            # Finished prose: polish under the strict announcement-grade guard
+            # (no digit lost, no invented temporal gloss) instead of compressing.
+            prompt = _prompt_recap_polish(source)
+            guard_kind = "announce"
     elif kind == "announce":
         prompt = _prompt_announce(source)
     else:
@@ -266,7 +302,7 @@ def expand(kind: str, text: str, store: Any) -> dict[str, Any]:
 
     started = time.time()
     last_reason = ""
-    temperatures = (0.1, 0.0) if kind == "announce" else (0.3, 0.1)
+    temperatures = (0.1, 0.0) if guard_kind == "announce" else (0.3, 0.1)
     for attempt, temperature in enumerate(temperatures):
         try:
             data = _http_json(
@@ -293,7 +329,7 @@ def expand(kind: str, text: str, store: Any) -> dict[str, Any]:
         if not draft:
             last_reason = "输出为空"
             continue
-        reason = fact_guard(kind, source, draft)
+        reason = fact_guard(guard_kind, source, draft)
         if not reason:
             return {
                 "ok": True,
