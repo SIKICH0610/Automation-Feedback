@@ -1435,3 +1435,26 @@ textarea.cell-input.is-expanded {
 #closing-block {
   margin-top: 22px;
 }
+
+.heading-buttons {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.ai-button {
+  color: var(--teal-dark);
+  border-color: var(--teal);
+}
+
+.ai-button:disabled {
+  opacity: 0.7;
+}
+
+/* The AI button that rides on the expanded long-text cell editor. */
+.cell-ai-button {
+  position: absolute;
+  z-index: 41;
+  padding: 4px 10px;
+  font-size: 11px;
+}

@@ -122,6 +122,26 @@ number pulls its explanation — there is no keyword matching. Banks live in the
 database; the Python bank files seed a bank only the first time it is created, and
 after that the editor is the live source.
 
+### AI 扩写 / 润色（本地，可选）
+
+With [Ollama](https://ollama.com) installed (`brew install ollama && ollama serve`,
+plus `ollama pull qwen2.5:7b` — 3b on 8GB machines, picked automatically), three AI
+buttons appear; without Ollama they stay hidden and nothing else changes:
+
+- **AI 扩写** on the Remark/Additional-Comment cell editor: keywords → a short
+  parent-facing paragraph, in the teacher's own voice (a few of their past comments
+  are used as live style examples, pulled from the local database and never bundled).
+- **AI 扩写** on the recap box: topic keywords → the one-line recap.
+- **AI 润色** on the announcement: sentence-conservative polish that never touches
+  facts.
+
+Every draft passes a fact guard — no digits may appear that the teacher didn't type,
+an announcement may not lose one, and invented temporal glosses ("考试结束后…") are
+rejected — with one automatic retry, then a clear refusal. Drafts land in the input
+box for the teacher to review and edit; nothing AI-written enters a message unseen.
+Each accepted draft is logged to `app_data/ai_corpus.jsonl` (local only) as future
+fine-tuning material.
+
 ## Sending
 
 All paste actions open the chat, fill the message box, and stop. They never press Send.

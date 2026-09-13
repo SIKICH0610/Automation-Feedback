@@ -29,6 +29,7 @@ from database_store import (
     StoreError,
     announcement_filename,
 )
+import ai_polish
 from import_enrollment import group_by_class, read_enrollment_rows
 from quiz_bank_store import QuizBankStoreError
 
@@ -879,6 +880,7 @@ class FrontendHandler(BaseHTTPRequestHandler):
                         "quiz_banks": self.store.list_quiz_banks(),
                         "platform": sys.platform,
                         "paste_supported": os.name == "nt" or sys.platform == "darwin",
+                "ai": ai_polish.ai_status(),
                     },
                 )
                 return
@@ -1075,6 +1077,30 @@ class FrontendHandler(BaseHTTPRequestHandler):
                     str(payload.get("text") or ""),
                 )
                 self._send_json(200, {"ok": True, "lesson_recap": recap})
+                return
+            if parsed.path == "/api/ai/expand":
+                kind = str(payload.get("kind") or "")
+                source_text = str(payload.get("text") or "")
+                result = ai_polish.expand(kind, source_text, self.store)
+                if result.get("ok"):
+                    # Every draft becomes local training material for a future
+                    # fine-tune: (input keywords, draft). Final wording lives in the
+                    # roster columns anyway. Local file, never leaves the machine.
+                    try:
+                        corpus_path = self.store.app_data_dir / ai_polish.CORPUS_FILENAME
+                        with open(corpus_path, "a", encoding="utf-8") as handle:
+                            handle.write(json.dumps({
+                                "ts": datetime.now().isoformat(timespec="seconds"),
+                                "kind": kind,
+                                "input": source_text,
+                                "draft": result.get("text", ""),
+                                "model": result.get("model", ""),
+                            }, ensure_ascii=False) + "\n")
+                    except OSError:
+                        pass
+                    self._send_json(200, result)
+                else:
+                    self._send_json(422, {"ok": False, "error": result.get("error", "AI 扩写失败")})
                 return
             if parsed.path == "/api/closing-note/save":
                 note = self.store.write_closing_note(

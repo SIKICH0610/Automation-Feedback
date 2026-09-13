@@ -113,7 +113,10 @@
             </div>
             <div class="section-heading">
               <h2 id="recap-title" class="has-tip">本节课内容回顾</h2>
-              <button id="save-recap" class="button secondary small" type="button">Save</button>
+              <div class="heading-buttons">
+                <button id="ai-recap" class="button secondary small ai-button" type="button" hidden title="把框里的知识点关键词扩写成一句完整回顾（本地 AI，生成后请过目修改）">AI 扩写</button>
+                <button id="save-recap" class="button secondary small" type="button">Save</button>
+              </div>
             </div>
             <textarea id="recap-text" rows="5" placeholder="例如：今天的课程主要围绕三角形全等的判定、勾股定理的应用展开"></textarea>
             <div id="closing-block">
@@ -135,7 +138,10 @@
           <section id="rail-announce" class="rail-panel side-section" aria-label="Announcement" hidden>
             <div class="section-heading">
               <h2 id="announcement-title" class="has-tip" title="面向全班群发的公告文字和附件，与逐个学生的反馈无关。粘贴时对每个选中学生的聊天各贴一份，不会自动发送。">Announcement 公告</h2>
-              <button id="save-announcement" class="button secondary small" type="button">Save</button>
+              <div class="heading-buttons">
+                <button id="ai-announce" class="button secondary small ai-button" type="button" hidden title="润色整段通知：只改语言和分段，事实、时间、数字一律不动（本地 AI，含数字校验）">AI 润色</button>
+                <button id="save-announcement" class="button secondary small" type="button">Save</button>
+              </div>
             </div>
             <textarea id="announcement-text" rows="10" placeholder="Write the class announcement or course description here"></textarea>
             <p id="announcement-path" class="file-path"></p>

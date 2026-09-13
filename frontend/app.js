@@ -820,6 +820,7 @@ function createEditor(row, column) {
     // the window itself is not the OS-focused window (e.g. a background webview).
     editor.addEventListener("focus", () => editor.classList.add("is-expanded"));
     editor.addEventListener("blur", () => editor.classList.remove("is-expanded"));
+    attachCellAiButton(editor, column, row);
   } else {
     editor = document.createElement("input");
     editor.type = "text";
@@ -1018,6 +1019,104 @@ async function switchContentMode(mode) {
     elements.columnView.value = view;
     renderTable();
   }
+}
+
+const AI_CELL_COLUMNS = new Set(["Remark for Student", "Additional Comment"]);
+
+function aiAvailable() {
+  return !!(state.bootstrap && state.bootstrap.ai && state.bootstrap.ai.available);
+}
+
+async function aiExpand(kind, sourceText) {
+  const result = await api("/api/ai/expand", {
+    method: "POST",
+    body: JSON.stringify({ kind, text: sourceText }),
+  });
+  return result;
+}
+
+// Wires one heading AI button to a textarea: keywords in the box are replaced by
+// the expanded draft, which the teacher then reviews and edits like any text.
+function bindAiButton(button, textarea, kind, dirtyKind) {
+  button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    const source = textarea.value.trim();
+    if (!source) {
+      toast("先在框里写几个关键词。", true);
+      return;
+    }
+    const originalLabel = button.textContent;
+    button.disabled = true;
+    button.textContent = "生成中…";
+    try {
+      const result = await aiExpand(kind, source);
+      textarea.value = result.text;
+      markDirty(dirtyKind);
+      toast(`AI 草稿已生成（${result.elapsed}s），请过目修改后再保存。`);
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      button.disabled = false;
+      button.textContent = originalLabel;
+    }
+  });
+}
+
+// The long-text cell editor gets a floating AI button while expanded, for the
+// keyword columns only (Remark for Student / Additional Comment).
+function attachCellAiButton(editor, column, row) {
+  if (!AI_CELL_COLUMNS.has(column.key)) return;
+  let button = null;
+  editor.addEventListener("focus", () => {
+    if (!aiAvailable() || button) return;
+    button = document.createElement("button");
+    button.type = "button";
+    button.className = "button secondary small ai-button cell-ai-button";
+    button.textContent = "AI 扩写";
+    button.title = "把格子里的关键词扩写成一小段家长反馈（本地 AI，生成后请过目修改）";
+    // mousedown would blur the textarea and collapse the editor before click.
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", async () => {
+      const source = editor.value.trim();
+      if (!source) {
+        toast("先在格子里写几个关键词。", true);
+        return;
+      }
+      button.textContent = "生成中…";
+      button.disabled = true;
+      try {
+        const result = await aiExpand("student", source);
+        editor.value = result.text;
+        row.values[column.key] = result.text;
+        markDirty("sheet");
+        toast(`AI 草稿已生成（${result.elapsed}s），请过目修改后再保存。`);
+      } catch (error) {
+        toast(error.message, true);
+      } finally {
+        button.textContent = "AI 扩写";
+        button.disabled = false;
+        editor.focus();
+      }
+    });
+    editor.parentElement.appendChild(button);
+    positionCellAiButton(editor, button);
+  });
+  editor.addEventListener("blur", () => {
+    // Give the button's own click a beat to land before removing it.
+    window.setTimeout(() => {
+      if (button && document.activeElement !== editor) {
+        button.remove();
+        button = null;
+      }
+    }, 250);
+  });
+}
+
+function positionCellAiButton(editor, button) {
+  // The expanded editor is absolutely positioned in its td; pin the button to
+  // its bottom-right corner.
+  button.style.right = "6px";
+  button.style.top = "232px";
 }
 
 function switchRailTab(name) {
@@ -1462,6 +1561,8 @@ function bindEvents() {
     markDirty(state.contentMode === "general" ? "recap" : "quizRecap")
   );
   elements.closingText.addEventListener("input", () => markDirty("closing"));
+  bindAiButton(elements.aiRecap, elements.recapText, "recap", "recap");
+  bindAiButton(elements.aiAnnounce, elements.announcementText, "announce", "announcement");
   elements.addAttachment.addEventListener("click", () => elements.attachmentInput.click());
   elements.attachmentInput.addEventListener("change", () => uploadAttachments(elements.attachmentInput.files));
   document.querySelectorAll(".mode-switch .segment").forEach((button) => {
@@ -1557,6 +1658,8 @@ async function initialize() {
     "recapTitle",
     "closingBlock",
     "closingText",
+    "aiRecap",
+    "aiAnnounce",
     "generateTarget",
     "pasteTarget",
     "actionGenerate",
@@ -1588,6 +1691,10 @@ async function initialize() {
     renderTabs();
     renderMode();
     setLog("Ready.");
+    if (aiAvailable()) {
+      elements.aiRecap.hidden = false;
+      elements.aiAnnounce.hidden = false;
+    }
     renderChannelChoice();
     if (!bootstrap.default_sheet) throw new Error("The database has no class sheets.");
     await loadSheet(bootstrap.default_sheet);
