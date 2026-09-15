@@ -27,11 +27,11 @@ rm -f "$ADAPTERS"/0*_adapters.safetensors
   --fine-tune-type lora \
   --num-layers 8 \
   --batch-size 1 \
-  --iters 120 \
+  --iters 400 \
   --learning-rate 5e-5 \
-  --steps-per-eval 15 \
+  --steps-per-eval 25 \
   --val-batches -1 \
-  --save-every 15 \
+  --save-every 25 \
   --max-seq-length 1024 \
   --grad-checkpoint \
   --mask-prompt \

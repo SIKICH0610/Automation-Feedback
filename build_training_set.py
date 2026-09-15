@@ -7,8 +7,10 @@ student names, and writes:
 
     app_data/training/pairs_v1.jsonl    all approved 素材→评语 pairs (zh + en)
     app_data/training/singles_v1.jsonl  approved comments without 素材 (style bank)
-    app_data/training/train.jsonl       MLX-LM chat format, Chinese pairs
-    app_data/training/valid.jsonl       held-out validation split
+    app_data/training/train.jsonl       MLX-LM chat format: authentic paragraphs
+                                        behind a generic ask (majority, style
+                                        objective) + 素材→评语 pairs (minority)
+    app_data/training/valid.jsonl       held-out validation split (same mix)
     ~/Downloads/训练集v1-入选评语.xlsx    human-readable review copy
 
 Label precedence per row: a 标注 typed into the sheet wins; LABEL_PATCH fills
@@ -130,12 +132,45 @@ TRIM_TO: dict[int, str] = {
 
 _GREETING = re.compile(r"^\s*(?:[A-Za-z][\w .'-]*)?家长您好[，,。！!～~\s]*")
 
-TRAIN_SYSTEM = (
+# Two training objectives, style-first by the teacher's request (2026-09-15):
+# the model should mainly absorb what AUTHENTIC feedback prose sounds like,
+# not a keyword->phrase lookup table. Style samples (the majority) put the
+# loss on real paragraphs behind a generic ask that carries no facts; pair
+# samples (the minority) keep the "ground on the given facts" discipline the
+# runtime task needs.
+TRAIN_SYSTEM_PAIR = (
     "你是 Think Academy 的数学老师，正在给家长写孩子的课堂反馈。"
     "把老师的课堂速记/关键词改写成发给家长的评语：保留速记里的每个事实，不添加新事实；"
     "不写学生姓名和称呼，不写问候和结尾；这条消息只发给一位家长、只谈这一个孩子，"
     "用“孩子”做主语，绝不能出现“孩子们”“同学们”等群体称呼。"
 )
+TRAIN_SYSTEM_STYLE = (
+    "你是 Think Academy 的数学老师，正在给家长写孩子的课堂反馈。"
+    "用你平时的口吻写：只发给一位家长、只谈这一个孩子，用“孩子”做主语，"
+    "绝不能出现“孩子们”“同学们”等群体称呼；不写学生姓名，不写问候和结尾。"
+)
+STYLE_ASKS = {
+    "补充短评": "写一条发给家长的课堂补充短评。",
+    "课后反馈": "写一段发给家长的课后反馈评语。",
+}
+STYLE_MIN_CHARS = 14  # drop degenerate one-liners from training (corpus keeps them)
+STYLE_VALID_SIZE = 8
+
+
+def _chat_sample(entry: dict) -> dict:
+    if entry["material"]:
+        system = TRAIN_SYSTEM_PAIR
+        user = f"课堂速记：{entry['material']}"
+    else:
+        system = TRAIN_SYSTEM_STYLE
+        user = STYLE_ASKS.get(entry["type"], STYLE_ASKS["课后反馈"])
+    return {
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+            {"role": "assistant", "content": entry["final"]},
+        ]
+    }
 
 
 def _has_cjk(text: str) -> bool:
@@ -230,6 +265,7 @@ def build() -> None:
         lang = "zh" if _has_cjk(final) else "en"
         entry = {
             "id": row["id"],
+            "type": row["type"],
             "quality": "B" if row["note"] else "A",
             "lang": lang,
             "origin": "手标" if row["origin"] == "hand" else "批量",
@@ -261,21 +297,25 @@ def build() -> None:
             for entry in data:
                 fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
+    rng = random.Random(SEED)
     zh_pairs = [p for p in pairs if p["lang"] == "zh"]
-    shuffled = zh_pairs[:]
-    random.Random(SEED).shuffle(shuffled)
-    valid, train = shuffled[:VALID_SIZE], shuffled[VALID_SIZE:]
+    pair_pool = zh_pairs[:]
+    rng.shuffle(pair_pool)
+    pair_valid, pair_train = pair_pool[:VALID_SIZE], pair_pool[VALID_SIZE:]
+
+    style_pool = [
+        s for s in singles if s["lang"] == "zh" and len(s["final"]) >= STYLE_MIN_CHARS
+    ]
+    rng.shuffle(style_pool)
+    style_valid, style_train = style_pool[:STYLE_VALID_SIZE], style_pool[STYLE_VALID_SIZE:]
+
+    train = pair_train + style_train
+    rng.shuffle(train)
+    valid = pair_valid + style_valid
     for name, split in (("train.jsonl", train), ("valid.jsonl", valid)):
         with open(OUT_DIR / name, "w", encoding="utf-8") as fh:
             for entry in split:
-                sample = {
-                    "messages": [
-                        {"role": "system", "content": TRAIN_SYSTEM},
-                        {"role": "user", "content": f"课堂速记：{entry['material']}"},
-                        {"role": "assistant", "content": entry["final"]},
-                    ]
-                }
-                fh.write(json.dumps(sample, ensure_ascii=False) + "\n")
+                fh.write(json.dumps(_chat_sample(entry), ensure_ascii=False) + "\n")
 
     write_review(pairs, singles, dropped)
 
@@ -288,7 +328,8 @@ def build() -> None:
     print(f"pairs: {len(pairs)} (zh {len(zh_pairs)}, en {len(pairs) - len(zh_pairs)})")
     print(f"singles: {len(singles)} (zh {zh_singles}, en {len(singles) - zh_singles}), "
           f"collapsed dupes: {collapsed}, dropped: {len(dropped)}")
-    print(f"train: {len(train)}, valid: {len(valid)} -> {OUT_DIR}")
+    print(f"train: {len(train)} (style {len(style_train)}, pair {len(pair_train)}), "
+          f"valid: {len(valid)} (style {len(style_valid)}, pair {len(pair_valid)}) -> {OUT_DIR}")
     print(f"review copy -> {REVIEW_XLSX}")
 
 
