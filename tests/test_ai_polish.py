@@ -60,6 +60,9 @@ class PluralGuardTest(unittest.TestCase):
     def test_sanitizer_downgrades_noun_plurals(self):
         self.assertEqual(_sanitize_draft("孩子们上课很认真，和同学们讨论积极～"), "孩子上课很认真，和同学讨论积极～")
 
+    def test_sanitizer_naturalizes_child_references(self):
+        self.assertEqual(_sanitize_draft("您孩子的表现非常认真，该生进步明显～"), "孩子的表现非常认真，孩子进步明显～")
+
     def test_sanitizer_removes_stock_courtesy(self):
         self.assertEqual(_sanitize_draft("请周四前提交作业。感谢您的配合！"), "请周四前提交作业。")
 

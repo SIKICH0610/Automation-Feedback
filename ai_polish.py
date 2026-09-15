@@ -235,6 +235,7 @@ def _prompt_student(keywords: str, examples: list[str]) -> str:
         "可以在事实基础上加一点具体的肯定和下一步的小建议，但不得引入新事实\n"
         "- 多数句子以“～”结尾\n"
         "- 这条消息只发给一位家长、只谈这一个孩子：绝不能出现“孩子们”“同学们”“各位”“大家”等群体称呼\n"
+        "- 提到孩子时直接用“孩子”做主语，口语自然——不说“您孩子的表现非常认真”，要说“孩子上课很认真”；不用“该生”“表现出色”这类书面腔\n"
         "只输出扩写后的这段话。"
     )
 
@@ -271,6 +272,7 @@ def _prompt_student_rewrite(material: str, examples: list[str]) -> str:
         "- 不要写学生姓名，不要称呼，不要问候和结尾（模板会加）\n"
         "- 语气亲切自然，多数句子以“～”结尾\n"
         "- 这条消息只发给一位家长、只谈这一个孩子：绝不能出现“孩子们”“同学们”“各位”“大家”等群体称呼\n"
+        "- 提到孩子时直接用“孩子”做主语，口语自然——不说“您孩子的表现非常认真”，要说“孩子上课很认真”；不用“该生”“表现出色”这类书面腔\n"
         "只输出改写后的这段话。"
     )
 
@@ -348,7 +350,16 @@ _STOCK_COURTESY = re.compile(
 
 # Point-to-point messages: plural nouns downgrade deterministically instead of
 # burning a retry (the model writes 同学们 whenever the material mentions 同学).
-_PLURAL_DOWNGRADES = (("孩子们", "孩子"), ("同学们", "同学"), ("学生们", "学生"))
+_PLURAL_DOWNGRADES = (
+    ("孩子们", "孩子"),
+    ("同学们", "同学"),
+    ("学生们", "学生"),
+    # Stiff third-person references: the natural subject is just 孩子.
+    ("您的孩子", "孩子"),
+    ("您孩子", "孩子"),
+    ("贵子女", "孩子"),
+    ("该生", "孩子"),
+)
 
 
 def _sanitize_draft(draft: str) -> str:
