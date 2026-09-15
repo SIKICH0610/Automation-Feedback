@@ -149,12 +149,23 @@ TRAIN_SYSTEM_STYLE = (
     "用你平时的口吻写：只发给一位家长、只谈这一个孩子，用“孩子”做主语，"
     "绝不能出现“孩子们”“同学们”等群体称呼；不写学生姓名，不写问候和结尾。"
 )
-STYLE_ASKS = {
-    "补充短评": "写一条发给家长的课堂补充短评。",
-    "课后反馈": "写一段发给家长的课后反馈评语。",
-}
 STYLE_MIN_CHARS = 14  # drop degenerate one-liners from training (corpus keeps them)
 STYLE_VALID_SIZE = 8
+# The singles corpus skews short (most are 20-60 char quick comments). Without
+# length conditioning the v2 adapter learned "a proper answer is one short
+# sentence" and started dropping facts / looping on long inputs, so each style
+# sample now names its own length bucket and the model learns the authentic
+# register PER LENGTH instead of averaging toward the shortest.
+PAIR_UPWEIGHT = 2  # pairs appear twice in training to hold fact-grounding
+
+
+def _style_ask(final: str) -> str:
+    n = len(final)
+    if n < 40:
+        return "写一条发给家长的简短课堂短评，一两句话。"
+    if n <= 90:
+        return "写一条发给家长的课堂反馈短评，两三句话。"
+    return "写一段完整的发给家长的课后反馈评语，三到五句话。"
 
 
 def _chat_sample(entry: dict) -> dict:
@@ -163,7 +174,7 @@ def _chat_sample(entry: dict) -> dict:
         user = f"课堂速记：{entry['material']}"
     else:
         system = TRAIN_SYSTEM_STYLE
-        user = STYLE_ASKS.get(entry["type"], STYLE_ASKS["课后反馈"])
+        user = _style_ask(entry["final"])
     return {
         "messages": [
             {"role": "system", "content": system},
@@ -309,7 +320,7 @@ def build() -> None:
     rng.shuffle(style_pool)
     style_valid, style_train = style_pool[:STYLE_VALID_SIZE], style_pool[STYLE_VALID_SIZE:]
 
-    train = pair_train + style_train
+    train = pair_train * PAIR_UPWEIGHT + style_train
     rng.shuffle(train)
     valid = pair_valid + style_valid
     for name, split in (("train.jsonl", train), ("valid.jsonl", valid)):
