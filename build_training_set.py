@@ -11,9 +11,14 @@ student names, and writes:
     app_data/training/valid.jsonl       held-out validation split
     ~/Downloads/训练集v1-入选评语.xlsx    human-readable review copy
 
-Labels typed into the sheet win; LABEL_PATCH fills rows whose 标注 cell is
-still empty (the first labeling round arrived via chat before the sheet was
-saved). Re-run after more labeling:  .venv/bin/python build_training_set.py
+Label precedence per row: a 标注 typed into the sheet wins; LABEL_PATCH fills
+rows whose cell is still empty (the first labeling round arrived via chat
+before the sheet was saved); finally, unlabeled rows from the two handwritten
+singles sections default to 好 — the teacher blanket-approved them on
+2026-09-15 ("都是算好的") — minus the BULK_EXCLUDE rows that are not
+parent-facing feedback at all. Re-run after more labeling:
+
+    .venv/bin/python build_training_set.py
 """
 from __future__ import annotations
 
@@ -72,6 +77,39 @@ LABEL_PATCH: dict[int, tuple[str, str]] = {
     **{i: _GOOD for i in range(35, 49)},
 }
 
+# The teacher blanket-approved these handwritten sections; unlabeled rows from
+# these sources count as 好 unless excluded below.
+BULK_GOOD_SOURCES = ("student list/", "App数据库/Additional Comment")
+BULK_EXCLUDE: dict[int, str] = {
+    74: "缺勤询问，不是给家长的评语",
+    108: "缺勤询问，不是给家长的评语",
+    135: "句子截断（以冒号结尾）",
+    146: "群发口吻（“孩子们”）且同时谈两个学生",
+    149: "同时谈两个学生",
+}
+KEEP_FIRST_PARAGRAPH = {116}  # 一格里拼了多条消息，只保留第一条完整评语
+# Point-to-point voice only: bulk-approved singles carrying a group address
+# are dropped automatically (a hand-typed 好 in the sheet still wins).
+GROUP_MARKERS = ("孩子们", "同学们", "学生们", "各位家长", "家长们")
+
+# Voice attribution, confirmed by the teacher on 2026-09-15: all three source
+# spreadsheets were written by OTHER teachers (student list is a mix), so the
+# whole v1 corpus feeds the shared base model, not the teacher's personal
+# adapter. Tags are per-table; merge tags later if two tables share an author.
+VOICE_BY_SOURCE = (
+    ("G5-Fall26/", "同事(G5表)"),
+    ("Lesson Feedback/", "同事(LF表)"),
+    ("student list/", "混合待分"),
+    ("App数据库/Additional Comment", "同事(FallStudent表)"),
+)
+
+
+def _voice_for(source: str) -> str:
+    for prefix, voice in VOICE_BY_SOURCE:
+        if source.startswith(prefix):
+            return voice
+    return "未知"
+
 # Sentence-level repairs the teacher requested in 备注, applied to the 评语
 # before it enters the corpus. Keyed by 编号.
 FIXUPS: dict[int, list[tuple[str, str]]] = {
@@ -82,6 +120,7 @@ FIXUPS: dict[int, list[tuple[str, str]]] = {
     15: [("这个习惯比多做对几道题珍贵得多", "这是非常好的习惯")],
     24: [("这股劲儿我想帮她保住", "希望她能把这股劲头保持下去")],
     25: [("所以安静不是没听进去，是性格。", "她只是性格偏安静，内容其实都听进去了。")],
+    116: [("方便很多的做法", "方便很多的做法。")],
 }
 # Full-message rows: keep only the personal paragraph, from this substring on
 # (the recap/greeting before it is the template's job, not the model's).
@@ -139,10 +178,19 @@ def load_rows() -> list[dict]:
         if rid is None or not final:
             continue
         rid = int(rid)
+        src = str(source or "").strip()
         label = str(label).strip() if label else ""
         note = str(note).strip() if note else ""
+        origin = "hand" if label else ""
         if not label and rid in LABEL_PATCH:
             label, note = LABEL_PATCH[rid]
+            origin = "hand"
+        if (
+            not label
+            and rid not in BULK_EXCLUDE
+            and any(src.startswith(prefix) for prefix in BULK_GOOD_SOURCES)
+        ):
+            label, origin = "好", "bulk"
         rows.append(
             {
                 "id": rid,
@@ -150,9 +198,10 @@ def load_rows() -> list[dict]:
                 "material": str(material or "").strip(),
                 "final": str(final or "").strip(),
                 "student": str(student or "").strip(),
-                "source": str(source or "").strip(),
+                "source": src,
                 "label": label,
                 "note": note,
+                "origin": origin,
             }
         )
     return rows
@@ -162,27 +211,49 @@ def build() -> None:
     rows = load_rows()
     labeled = [r for r in rows if r["label"]]
     good = [r for r in labeled if r["label"] == "好"]
+    dropped = [(r, BULK_EXCLUDE[r["id"]]) for r in rows if not r["label"] and r["id"] in BULK_EXCLUDE]
 
     pairs, singles = [], []
     for row in good:
         final = row["final"]
+        if row["id"] in KEEP_FIRST_PARAGRAPH:
+            final = next(block.strip() for block in final.split("\n") if block.strip())
         if row["id"] in TRIM_TO:
             anchor = TRIM_TO[row["id"]]
             if anchor in final:
                 final = final[final.index(anchor):]
         for old, new in FIXUPS.get(row["id"], []):
             final = final.replace(old, new)
+        if row["origin"] == "bulk" and any(marker in final for marker in GROUP_MARKERS):
+            dropped.append((row, "群体称呼，自动剔除"))
+            continue
         lang = "zh" if _has_cjk(final) else "en"
         entry = {
             "id": row["id"],
             "quality": "B" if row["note"] else "A",
             "lang": lang,
+            "origin": "手标" if row["origin"] == "hand" else "批量",
+            "voice": _voice_for(row["source"]),
             "source": row["source"],
             "material": _strip_name(row["material"], row["student"], lang),
             "final": _strip_name(final, row["student"], lang),
             "note": row["note"],
         }
         (pairs if entry["material"] else singles).append(entry)
+
+    # The teacher sent some messages verbatim to several parents; keep one
+    # copy of each such family so no phrasing is over-weighted.
+    seen: dict[str, dict] = {}
+    deduped = []
+    for entry in singles:
+        key = re.sub(r"\s+", " ", entry["final"]).strip().lower()
+        if key in seen:
+            seen[key]["dupes"] = seen[key].get("dupes", 1) + 1
+            continue
+        seen[key] = entry
+        deduped.append(entry)
+    collapsed = len(singles) - len(deduped)
+    singles = deduped
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     for name, data in (("pairs_v1.jsonl", pairs), ("singles_v1.jsonl", singles)):
@@ -206,42 +277,73 @@ def build() -> None:
                 }
                 fh.write(json.dumps(sample, ensure_ascii=False) + "\n")
 
-    write_review(pairs + singles)
+    write_review(pairs, singles, dropped)
 
-    total = len(rows)
-    print(f"sheet rows: {total}, labeled: {len(labeled)}, 好: {len(good)}")
-    print(f"pairs: {len(pairs)} (zh {len(zh_pairs)}, en {len(pairs) - len(zh_pairs)}), singles: {len(singles)}")
-    print(f"quality A: {sum(1 for p in pairs if p['quality'] == 'A')}, B: {sum(1 for p in pairs if p['quality'] == 'B')}")
+    zh_singles = sum(1 for s in singles if s["lang"] == "zh")
+    voices: dict[str, int] = {}
+    for entry in pairs + singles:
+        voices[entry["voice"]] = voices.get(entry["voice"], 0) + 1
+    print(f"sheet rows: {len(rows)}, labeled/approved: {len(labeled)}, 好: {len(good)}")
+    print("voice breakdown:", ", ".join(f"{k} {v}" for k, v in sorted(voices.items())))
+    print(f"pairs: {len(pairs)} (zh {len(zh_pairs)}, en {len(pairs) - len(zh_pairs)})")
+    print(f"singles: {len(singles)} (zh {zh_singles}, en {len(singles) - zh_singles}), "
+          f"collapsed dupes: {collapsed}, dropped: {len(dropped)}")
     print(f"train: {len(train)}, valid: {len(valid)} -> {OUT_DIR}")
     print(f"review copy -> {REVIEW_XLSX}")
 
 
-def write_review(entries: list[dict]) -> None:
+def write_review(pairs: list[dict], singles: list[dict], dropped: list[tuple[dict, str]]) -> None:
     wb = Workbook()
     ws = wb.active
     ws.title = "训练集v1"
-    headers = ["原表编号", "质量", "语言", "素材（清洗后）", "评语（入选定稿）", "来源", "处理说明"]
+    headers = ["原表编号", "类别", "质量", "语言", "素材（清洗后）", "评语（入选定稿）", "来源", "声音归属", "处理说明"]
     ws.append(headers)
     for cell in ws[1]:
         cell.font = Font(bold=True)
-    for entry in sorted(entries, key=lambda e: e["id"]):
+
+    def notes_for(entry: dict) -> str:
         notes = []
-        if entry["id"] in FIXUPS or entry["id"] in TRIM_TO:
+        if entry["id"] in FIXUPS or entry["id"] in TRIM_TO or entry["id"] in KEEP_FIRST_PARAGRAPH:
             notes.append("已按你的备注修改")
+        if entry["origin"] == "批量":
+            notes.append("批量入库（你确认整批算好）")
+        if entry.get("dupes"):
+            notes.append(f"同款消息共{entry['dupes']}条，仅保留这1条")
         if entry["note"]:
             notes.append(f"标注备注：{entry['note']}")
+        return "；".join(notes)
+
+    records = [("训练对", e) for e in pairs] + [("风格单条", e) for e in singles]
+    for kind, entry in sorted(records, key=lambda item: item[1]["id"]):
         ws.append(
             [
                 entry["id"],
+                kind,
                 entry["quality"],
                 entry["lang"],
                 entry["material"],
                 entry["final"],
                 entry["source"],
-                "；".join(notes),
+                entry["voice"],
+                notes_for(entry),
             ]
         )
-    widths = {"A": 9, "B": 6, "C": 6, "D": 46, "E": 64, "F": 26, "G": 34}
+    for row, reason in sorted(dropped, key=lambda item: item[0]["id"]):
+        ws.append(
+            [
+                row["id"],
+                "剔除",
+                "-",
+                "-",
+                row["material"],
+                row["final"],
+                row["source"],
+                _voice_for(row["source"]),
+                f"自动剔除：{reason}",
+            ]
+        )
+
+    widths = {"A": 9, "B": 9, "C": 6, "D": 6, "E": 38, "F": 56, "G": 22, "H": 15, "I": 30}
     for col, width in widths.items():
         ws.column_dimensions[col].width = width
     wrap = Alignment(wrap_text=True, vertical="top")
