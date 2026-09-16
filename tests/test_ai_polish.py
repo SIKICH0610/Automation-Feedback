@@ -72,6 +72,15 @@ class PluralGuardTest(unittest.TestCase):
     def test_singular_rewrite_passes(self):
         self.assertEqual(fact_guard("announce", "请同学们带三角板", "请帮孩子备好三角板～"), "")
 
+    def test_sanitizer_degenders_pronouns(self):
+        self.assertEqual(_sanitize_draft("她上课很认真，我每次点他都答得上来～"), "孩子上课很认真，我每次点孩子都答得上来～")
+
+    def test_degender_keeps_real_compounds(self):
+        self.assertEqual(_sanitize_draft("其他题目都做对了，做题不受他人影响。"), "其他题目都做对了，做题不受他人影响。")
+
+    def test_degender_collapses_plural_and_stacked_pronouns(self):
+        self.assertEqual(_sanitize_draft("他们的作业孩子他自己完成了。"), "孩子的作业孩子自己完成了。")
+
 
 class KeywordDetectionTest(unittest.TestCase):
     def test_short_bare_topics_are_keywords(self):

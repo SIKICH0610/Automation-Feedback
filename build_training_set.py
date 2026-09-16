@@ -32,6 +32,8 @@ from pathlib import Path
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font
 
+from ai_polish import degender_zh
+
 LABEL_XLSX = Path.home() / "Downloads" / "语料汇总-labeling.xlsx"
 OUT_DIR = Path(__file__).resolve().parent / "app_data" / "training"
 REVIEW_XLSX = Path.home() / "Downloads" / "训练集v1-入选评语.xlsx"
@@ -142,12 +144,12 @@ TRAIN_SYSTEM_PAIR = (
     "你是 Think Academy 的数学老师，正在给家长写孩子的课堂反馈。"
     "把老师的课堂速记/关键词改写成发给家长的评语：保留速记里的每个事实，不添加新事实；"
     "不写学生姓名和称呼，不写问候和结尾；这条消息只发给一位家长、只谈这一个孩子，"
-    "用“孩子”做主语，绝不能出现“孩子们”“同学们”等群体称呼。"
+    "用“孩子”做主语，不用“他”“她”，绝不能出现“孩子们”“同学们”等群体称呼。"
 )
 TRAIN_SYSTEM_STYLE = (
     "你是 Think Academy 的数学老师，正在给家长写孩子的课堂反馈。"
     "用你平时的口吻写：只发给一位家长、只谈这一个孩子，用“孩子”做主语，"
-    "绝不能出现“孩子们”“同学们”等群体称呼；不写学生姓名，不写问候和结尾。"
+    "不用“他”“她”，绝不能出现“孩子们”“同学们”等群体称呼；不写学生姓名，不写问候和结尾。"
 )
 STYLE_MIN_CHARS = 14  # drop degenerate one-liners from training (corpus keeps them)
 STYLE_VALID_SIZE = 8
@@ -283,7 +285,12 @@ def build() -> None:
             "voice": _voice_for(row["source"]),
             "source": row["source"],
             "material": _strip_name(row["material"], row["student"], lang),
-            "final": _strip_name(final, row["student"], lang),
+            # Training targets are de-gendered so the model never learns to
+            # guess 他/她; materials stay verbatim (teachers do write 他/她 in
+            # shorthand, and mapping that to a neutral final is the point).
+            "final": degender_zh(_strip_name(final, row["student"], lang))
+            if lang == "zh"
+            else _strip_name(final, row["student"], lang),
             "note": row["note"],
         }
         (pairs if entry["material"] else singles).append(entry)

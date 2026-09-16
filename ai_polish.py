@@ -238,6 +238,7 @@ def _prompt_student(keywords: str, examples: list[str]) -> str:
         "- 提到孩子时直接用“孩子”做主语，口语自然——不说“您孩子的表现非常认真”，要说“孩子上课很认真”；不用“该生”“表现出色”这类书面腔\n"
         "- 不写格言腔和抒情腔：不用“不是A，是B”式的总结句（如“安静不是没听进去，是性格”），"
         "不写老师的个人抒情（如“这股劲儿我想帮她保住”）；夸奖直接落在孩子的具体行为上\n"
+        "- 通篇不用“他”“她”——性别不要猜：能省略代词就省略，需要主语或代词时一律写“孩子”\n"
         "只输出扩写后的这段话。"
     )
 
@@ -277,6 +278,7 @@ def _prompt_student_rewrite(material: str, examples: list[str]) -> str:
         "- 提到孩子时直接用“孩子”做主语，口语自然——不说“您孩子的表现非常认真”，要说“孩子上课很认真”；不用“该生”“表现出色”这类书面腔\n"
         "- 不写格言腔和抒情腔：不用“不是A，是B”式的总结句（如“安静不是没听进去，是性格”），"
         "不写老师的个人抒情（如“这股劲儿我想帮她保住”）；夸奖直接落在孩子的具体行为上\n"
+        "- 通篇不用“他”“她”——性别不要猜：能省略代词就省略，需要主语或代词时一律写“孩子”\n"
         "只输出改写后的这段话。"
     )
 
@@ -366,10 +368,25 @@ _PLURAL_DOWNGRADES = (
 )
 
 
+# Parents must never see a guessed gender: the material rarely says 他/她, so
+# the model invents one. Per the teacher (2026-09-15), gendered pronouns
+# collapse to the role noun -- Chinese 孩子, mirroring English he/she -> the
+# student. Guards keep 其他/他人/吉他 etc. intact; 她 has no such compounds
+# once 她们 is handled.
+def degender_zh(text: str) -> str:
+    result = re.sub(r"[他她]们", "孩子", text)
+    result = re.sub(r"(?<![其吉维排利])他(?![人日乡])", "孩子", result)
+    result = result.replace("她", "孩子")
+    while "孩子孩子" in result:
+        result = result.replace("孩子孩子", "孩子")
+    return result
+
+
 def _sanitize_draft(draft: str) -> str:
     text = _STOCK_COURTESY.sub("", draft)
     for plural, singular in _PLURAL_DOWNGRADES:
         text = text.replace(plural, singular)
+    text = degender_zh(text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     # 模型偶尔把句号和波浪号叠在一起（“。～”）
     text = text.replace("。～", "～").replace("！～", "～")
