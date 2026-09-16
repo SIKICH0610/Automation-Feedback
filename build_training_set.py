@@ -32,7 +32,14 @@ from pathlib import Path
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font
 
-from ai_polish import degender_zh
+from ai_polish import degender_zh, limit_wave, plain_punctuation
+
+
+def _house_style(text: str) -> str:
+    """The teacher's output conventions, applied to zh training targets so the
+    model natively writes them: no gender guessing, no colons/dashes, ～ only
+    closing a paragraph."""
+    return plain_punctuation(limit_wave(degender_zh(text)))
 
 LABEL_XLSX = Path.home() / "Downloads" / "语料汇总-labeling.xlsx"
 OUT_DIR = Path(__file__).resolve().parent / "app_data" / "training"
@@ -285,10 +292,11 @@ def build() -> None:
             "voice": _voice_for(row["source"]),
             "source": row["source"],
             "material": _strip_name(row["material"], row["student"], lang),
-            # Training targets are de-gendered so the model never learns to
-            # guess 他/她; materials stay verbatim (teachers do write 他/她 in
-            # shorthand, and mapping that to a neutral final is the point).
-            "final": degender_zh(_strip_name(final, row["student"], lang))
+            # Training targets get the house conventions (de-gendered, plain
+            # punctuation, paragraph-final ～) so the model natively writes
+            # them; materials stay verbatim -- teachers do write 他/她 and
+            # colons in shorthand, and mapping that to clean output is the point.
+            "final": _house_style(_strip_name(final, row["student"], lang))
             if lang == "zh"
             else _strip_name(final, row["student"], lang),
             "note": row["note"],

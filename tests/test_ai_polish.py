@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import unittest
 
-from ai_polish import _looks_like_keywords, _sanitize_draft, _strip_wrapping, fact_guard, tone_examples
+from ai_polish import (
+    _looks_like_keywords,
+    _sanitize_draft,
+    _strip_wrapping,
+    attach_name,
+    fact_guard,
+    tone_examples,
+)
 
 
 class FakeStore:
@@ -80,6 +87,45 @@ class PluralGuardTest(unittest.TestCase):
 
     def test_degender_collapses_plural_and_stacked_pronouns(self):
         self.assertEqual(_sanitize_draft("他们的作业孩子他自己完成了。"), "孩子的作业孩子自己完成了。")
+
+    def test_wave_only_closes_the_paragraph(self):
+        self.assertEqual(_sanitize_draft("上课很认真～作业全对～"), "上课很认真。作业全对～")
+
+    def test_wave_digit_ranges_survive(self):
+        self.assertEqual(_sanitize_draft("下午3～4点上课，状态很好～"), "下午3～4点上课，状态很好～")
+
+    def test_colons_and_dashes_demote_to_commas(self):
+        self.assertEqual(
+            _sanitize_draft("有个现象：偶尔走神——不过思路很好～"),
+            "有个现象，偶尔走神，不过思路很好～",
+        )
+
+    def test_attach_name_merges_leading_role_noun(self):
+        self.assertEqual(attach_name("Sunnie", "孩子上课很认真。"), "Sunnie上课很认真。")
+        self.assertEqual(attach_name("Sunnie", "学生的作业完成得很好。"), "Sunnie的作业完成得很好。")
+        self.assertEqual(attach_name("Sunnie", "这节课整体很稳。"), "Sunnie这节课整体很稳。")
+
+
+class PolishCommentTest(unittest.TestCase):
+    def test_only_middle_paragraph_is_rewritten(self):
+        import ai_polish
+        from unittest import mock
+
+        comment = "家长您好～今天讲了平行线。\n\nSunnie原来的正文写得一般。\n\n请记得完成作业，谢谢配合。"
+        stub = {"ok": True, "text": "孩子上课很认真。", "model": "m", "elapsed": 2.0}
+        with mock.patch.object(ai_polish, "expand", return_value=stub):
+            result = ai_polish.polish_comment(comment, "Sunnie", None)
+        self.assertTrue(result["ok"])
+        head, middle, tail = result["text"].split("\n\n")
+        self.assertEqual(head, "家长您好～今天讲了平行线。")
+        self.assertEqual(middle, "Sunnie上课很认真。")
+        self.assertEqual(tail, "请记得完成作业，谢谢配合。")
+
+    def test_two_paragraph_comment_is_refused(self):
+        import ai_polish
+
+        result = ai_polish.polish_comment("第一段\n\n第二段", "Sunnie", None)
+        self.assertFalse(result["ok"])
 
 
 class KeywordDetectionTest(unittest.TestCase):

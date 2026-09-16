@@ -1085,7 +1085,12 @@ class FrontendHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/ai/expand":
                 kind = str(payload.get("kind") or "")
                 source_text = str(payload.get("text") or "")
-                result = ai_polish.expand(kind, source_text, self.store)
+                if kind == "comment":
+                    result = ai_polish.polish_comment(
+                        source_text, str(payload.get("name") or ""), self.store
+                    )
+                else:
+                    result = ai_polish.expand(kind, source_text, self.store)
                 if result.get("ok"):
                     # Every draft becomes local training material for a future
                     # fine-tune: (input keywords, draft). Final wording lives in the

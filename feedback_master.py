@@ -88,7 +88,7 @@ class FeedbackGenerator:
             return None
         material = "；".join(parts)
         try:
-            from ai_polish import expand
+            from ai_polish import attach_name, expand
 
             result = expand("student", material, None)
         except Exception:
@@ -97,7 +97,9 @@ class FeedbackGenerator:
             print(f"AI polish fell back to template: {result.get('error', 'unknown')}")
             return None
         name = student.first_name or student.full_name
-        return f"{name} {result['text']}"
+        # The draft opens with 孩子/学生 by design; gluing the real name in
+        # front of that read "Sunnie 孩子上课很认真" -- merge instead.
+        return attach_name(name, result["text"])
 
     def quiz_personal_paragraph(self, student: StudentRow) -> str:
         quiz_comment = quiz_comment_paragraph(

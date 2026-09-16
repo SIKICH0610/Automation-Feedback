@@ -1021,16 +1021,20 @@ async function switchContentMode(mode) {
   }
 }
 
-const AI_CELL_COLUMNS = new Set(["Remark for Student", "Additional Comment"]);
+// Keyword columns get expand-to-paragraph; the generated comment gets a
+// whole-comment polish that only rewrites the middle personal paragraph.
+// Additional Comment deliberately has no AI button (teacher's call).
+const AI_CELL_COLUMNS = new Set(["Remark for Student"]);
+const AI_COMMENT_COLUMNS = new Set(["Feedback"]);
 
 function aiAvailable() {
   return !!(state.bootstrap && state.bootstrap.ai && state.bootstrap.ai.available);
 }
 
-async function aiExpand(kind, sourceText) {
+async function aiExpand(kind, sourceText, extra = {}) {
   const result = await api("/api/ai/expand", {
     method: "POST",
-    body: JSON.stringify({ kind, text: sourceText }),
+    body: JSON.stringify({ kind, text: sourceText, ...extra }),
   });
   return result;
 }
@@ -1065,7 +1069,8 @@ function bindAiButton(button, textarea, kind, dirtyKind) {
 // The long-text cell editor gets a floating AI button while expanded, for the
 // keyword columns only (Remark for Student / Additional Comment).
 function attachCellAiButton(editor, column, row) {
-  if (!AI_CELL_COLUMNS.has(column.key)) return;
+  const isComment = AI_COMMENT_COLUMNS.has(column.key);
+  if (!AI_CELL_COLUMNS.has(column.key) && !isComment) return;
   let button = null;
   editor.addEventListener("focus", () => {
     if (!aiAvailable() || button) return;
@@ -1073,19 +1078,25 @@ function attachCellAiButton(editor, column, row) {
     button.type = "button";
     button.className = "button secondary small ai-button cell-ai-button";
     button.textContent = "AI 润色";
-    button.title = "关键词或速记润色成一小段家长反馈（本地 AI，生成后请过目修改）";
+    button.title = isComment
+      ? "整段评语再润色。只改中间的个人段，开头结尾的模板不动（本地 AI，生成后请过目）"
+      : "关键词或速记润色成一小段家长反馈（本地 AI，生成后请过目修改）";
     // mousedown would blur the textarea and collapse the editor before click.
     button.addEventListener("mousedown", (event) => event.preventDefault());
     button.addEventListener("click", async () => {
       const source = editor.value.trim();
       if (!source) {
-        toast("先在格子里写几个关键词。", true);
+        toast(isComment ? "这格还没有生成的评语。" : "先在格子里写几个关键词。", true);
         return;
       }
       button.textContent = "生成中…";
       button.disabled = true;
       try {
-        const result = await aiExpand("student", source);
+        const result = isComment
+          ? await aiExpand("comment", source, {
+              name: displayValue(row.values["First Name"]).trim(),
+            })
+          : await aiExpand("student", source);
         editor.value = result.text;
         row.values[column.key] = result.text;
         markDirty("sheet");

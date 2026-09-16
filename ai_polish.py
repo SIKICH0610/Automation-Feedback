@@ -233,7 +233,8 @@ def _prompt_student(keywords: str, examples: list[str]) -> str:
         "- 不要写“家长您好”，也不要写结尾问候（模板会自动加）\n"
         "- 语气亲切自然、有温度，像老师平时跟家长聊天；"
         "可以在事实基础上加一点具体的肯定和下一步的小建议，但不得引入新事实\n"
-        "- 多数句子以“～”结尾\n"
+        "- 中间句子用句号，整段只在最后一句用“～”收尾\n"
+        "- 不用冒号，不用破折号；用最普通、最常见的说法，别用书面腔和生僻表达\n"
         "- 这条消息只发给一位家长、只谈这一个孩子：绝不能出现“孩子们”“同学们”“各位”“大家”等群体称呼\n"
         "- 提到孩子时直接用“孩子”做主语，口语自然——不说“您孩子的表现非常认真”，要说“孩子上课很认真”；不用“该生”“表现出色”这类书面腔\n"
         "- 不写格言腔和抒情腔：不用“不是A，是B”式的总结句（如“安静不是没听进去，是性格”），"
@@ -273,7 +274,8 @@ def _prompt_student_rewrite(material: str, examples: list[str]) -> str:
         "- 速记里的每个事实和建议都要保留，但绝不能添加速记里没有的事实\n"
         "- 3 到 4 句、90 到 130 个字\n"
         "- 不要写学生姓名，不要称呼，不要问候和结尾（模板会加）\n"
-        "- 语气亲切自然，多数句子以“～”结尾\n"
+        "- 语气亲切自然；中间句子用句号，整段只在最后一句用“～”收尾\n"
+        "- 不用冒号，不用破折号；用最普通、最常见的说法\n"
         "- 这条消息只发给一位家长、只谈这一个孩子：绝不能出现“孩子们”“同学们”“各位”“大家”等群体称呼\n"
         "- 提到孩子时直接用“孩子”做主语，口语自然——不说“您孩子的表现非常认真”，要说“孩子上课很认真”；不用“该生”“表现出色”这类书面腔\n"
         "- 不写格言腔和抒情腔：不用“不是A，是B”式的总结句（如“安静不是没听进去，是性格”），"
@@ -304,7 +306,7 @@ def _prompt_recap_polish(text: str) -> str:
         "- 时态绝对不能变：原文说“将开始”“下节课”“即将”的内容是还没学的，"
         "绝不能写成已经学过；已经学过的也不能写成将要学\n"
         "- 不得添加原文没有的内容或解释\n"
-        "- 只调整用词和语气，让句子更通顺，句尾多用“～”\n"
+        "- 只调整用词和语气，让句子更通顺；不用冒号和破折号，“～”只放在结尾\n"
         "- 这条消息只发给一位家长、只谈这一个孩子：绝不能出现“孩子们”“同学们”“各位”“大家”等群体称呼\n""\n"
         f"原文：\n{text}\n\n"
         "直接输出润色后的全文，不要任何解释。"
@@ -315,7 +317,8 @@ def _prompt_announce(text: str) -> str:
     return (
         "润色下面这段发给家长的通知，让它更通顺、更有礼貌、分段更清楚。\n\n"
         "绝对不能更改、删除或添加任何事实、时间、日期、数字、地点或要求；"
-        "只能调整语言表达和分段。\n\n"
+        "只能调整语言表达和分段。"
+        "不用冒号和破折号（比如“时间：3点”要写成“时间是3点”）；“～”最多出现在段落结尾。\n\n"
         f"原文：\n{text}\n\n"
         "直接输出润色后的全文，不要任何解释。"
     )
@@ -382,14 +385,55 @@ def degender_zh(text: str) -> str:
     return result
 
 
+# House punctuation for parent-facing drafts (the teacher's standing writing
+# law): no colons and no dashes as punctuation, plainest common phrasing.
+# Mechanical demotion to a comma is the deterministic backstop; the prompts do
+# the real restructuring. Digit ranges (3—4点) survive.
+def plain_punctuation(text: str) -> str:
+    result = text.replace("：", "，")
+    result = re.sub(r"(?<![0-9])[—–]+(?![0-9])", "，", result)
+    return result.replace("，。", "。").replace("，，", "，")
+
+
+# “～” belongs at the end of a paragraph, once; interior waves read as spam to
+# the teacher. Digit ranges (下午3～4点) stay.
+def limit_wave(text: str) -> str:
+    lines = []
+    for line in text.split("\n"):
+        stripped = line.rstrip()
+        core, tail = (stripped[:-1], "～") if stripped.endswith("～") else (stripped, "")
+        core = re.sub(r"(?<![0-9０-９])～", "。", core)
+        lines.append(core.replace("。。", "。") + tail)
+    return "\n".join(lines)
+
+
+def attach_name(name: str, text: str) -> str:
+    """Join a student's name onto a draft that opens with a role noun.
+
+    Drafts say 孩子/学生 by design and the template supplies the real name, so
+    "Sunnie" + "孩子上课很认真" must read "Sunnie上课很认真", never "Sunnie 孩子…".
+    """
+    body = text.strip()
+    for prefix in ("孩子", "学生", "该生"):
+        if body.startswith(prefix):
+            body = body[len(prefix):].lstrip("，, ")
+            break
+    if not body:
+        return name
+    joiner = "" if "一" <= body[0] <= "鿿" else " "
+    return f"{name}{joiner}{body}"
+
+
 def _sanitize_draft(draft: str) -> str:
     text = _STOCK_COURTESY.sub("", draft)
     for plural, singular in _PLURAL_DOWNGRADES:
         text = text.replace(plural, singular)
     text = degender_zh(text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
     # 模型偶尔把句号和波浪号叠在一起（“。～”）
     text = text.replace("。～", "～").replace("！～", "～")
+    text = plain_punctuation(text)
+    text = limit_wave(text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
 
@@ -479,3 +523,37 @@ def expand(kind: str, text: str, store: Any) -> dict[str, Any]:
         "ok": False,
         "error": f"AI 草稿两次都没通过安全校验（{last_reason}），请手动书写这段。",
     }
+
+
+def polish_comment(text: str, name: str, store: Any) -> dict[str, Any]:
+    """Re-polish a generated comment in place.
+
+    Only the personal middle paragraphs are rewritten. The templated
+    greeting/recap head and the homework/closing tail carry standing
+    instructions, so they must survive untouched.
+    """
+    comment = (text or "").strip()
+    if not comment:
+        return {"ok": False, "error": "这格还没有生成的评语。"}
+    if not any("一" <= ch <= "鿿" for ch in comment):
+        return {"ok": False, "error": "AI 润色目前只支持中文评语。"}
+    paragraphs = [p for p in comment.split("\n\n")]
+    if len(paragraphs) < 3:
+        return {"ok": False, "error": "评语不是“开头、正文、结尾”的三段结构，直接重新生成更稳妥。"}
+    clean_name = (name or "").strip()
+    total_elapsed = 0.0
+    model = ""
+    middles = []
+    for paragraph in paragraphs[1:-1]:
+        body = paragraph.strip()
+        had_name = bool(clean_name) and body.startswith(clean_name)
+        if had_name:
+            body = body[len(clean_name):].lstrip(" ，,")
+        result = expand("student", body, store)
+        if not result.get("ok"):
+            return result
+        total_elapsed += float(result.get("elapsed") or 0)
+        model = result.get("model", model)
+        middles.append(attach_name(clean_name, result["text"]) if had_name else result["text"])
+    rebuilt = "\n\n".join([paragraphs[0], *middles, paragraphs[-1]])
+    return {"ok": True, "text": rebuilt, "model": model, "elapsed": round(total_elapsed, 1)}
