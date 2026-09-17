@@ -67,6 +67,16 @@ function run() {
   const se = Application("System Events");
   const proc = se.processes["%(process)s"];
 
+  // Pre-flight: a stray search window left over from an earlier mishap (or the
+  // person clicking around mid-batch) swallows every later Cmd+F, so anything
+  // beyond the main window gets Escaped away before we type.
+  let preflight = 0;
+  while (proc.windows.length > 1 && preflight < 3) {
+    se.keyCode(53); // Escape
+    delay(0.25);
+    preflight += 1;
+  }
+
   se.keystroke("f", {using: "command down"});
   delay(0.3);
   se.keystroke("a", {using: "command down"});
@@ -90,6 +100,29 @@ function run() {
   delay(0.8);
 
   se.keyCode(36); // Return: open WeCom's own top search result
+
+  // A successful open closes the results dialog on its own. When nothing
+  // matched, Return instead expands the palette into WeCom's full-page search
+  // window (its own titled window with tabs), which then eats every later
+  // Cmd+F and paste. So poll for the good outcome -- back to just the main
+  // window -- and only after the full wait conclude "no result" and Escape
+  // back out. The poll waits on success, never cuts it short, so slow
+  // machines are safe.
+  let settled = 0;
+  while (settled < 1.5) {
+    delay(0.15);
+    settled += 0.15;
+    if (proc.windows.length <= 1) break;
+  }
+  if (proc.windows.length > 1) {
+    let esc = 0;
+    while (proc.windows.length > 1 && esc < 3) {
+      se.keyCode(53); // Escape closes the full-page search window
+      delay(0.3);
+      esc += 1;
+    }
+    return JSON.stringify({ok: false, reason: "no_search_results"});
+  }
   delay(0.2);
   return JSON.stringify({ok: true});
 }
@@ -99,6 +132,12 @@ _JXA_CLEAR_SEARCH = """
 function run() {
   const se = Application("System Events");
   const proc = se.processes["%(process)s"];
+  let preflight = 0;
+  while (proc.windows.length > 1 && preflight < 3) {
+    se.keyCode(53); // Escape any stray search window before touching Cmd+F
+    delay(0.25);
+    preflight += 1;
+  }
   se.keystroke("f", {using: "command down"});
   delay(0.2);
   se.keystroke("a", {using: "command down"});
