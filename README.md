@@ -399,7 +399,6 @@ so `pywinauto` is never needed elsewhere.
 - `paste_attachments.py` — Windows file-clipboard staging.
 
 **Other**
-- `workbook_setup.py` — adds the optional helper columns to a legacy Excel workbook.
 - `setup.ps1`, `setup.sh` — first-time environment setup.
-- `Geo_TTh_Student_Script_fixed_rows_only.xlsx` — the one-time import source used to
-  create the database on a fresh install.
+- `roster_template.xlsx` — the blank workbook a fresh install seeds from; real
+  rosters only enter through the import flow.

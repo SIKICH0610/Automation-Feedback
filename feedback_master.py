@@ -16,23 +16,6 @@ from feedback_common import (
 from feedback_general import general_comment_paragraph
 from feedback_quiz import quiz_comment_paragraph
 
-def comprehensive_comment_paragraph(student: StudentRow, observations: list[str], is_chinese: bool) -> str:
-    quiz_comment = quiz_comment_paragraph(
-        student,
-        observations,
-        is_chinese,
-        include_observations=False,
-    )
-    general_comment = general_comment_paragraph(
-        student,
-        observations,
-        is_chinese,
-        include_quiz_remark=False,
-    )
-    if quiz_comment and general_comment:
-        return "\n\n".join([quiz_comment, general_comment])
-    return quiz_comment or general_comment
-
 @dataclass
 class FeedbackGenerator:
     class_review: str = ""

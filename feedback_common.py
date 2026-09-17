@@ -1,22 +1,15 @@
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from openpyxl import load_workbook
 
 
 PROJECT_DIR = Path(__file__).resolve().parent
-# A packaged build seeds a fresh install from the blank template: the real roster
-# workbook must never ship inside an installer handed to other people.
-_SEED_WORKBOOK = (
-    "roster_template.xlsx"
-    if getattr(sys, "frozen", False)
-    else "Geo_TTh_Student_Script_fixed_rows_only.xlsx"
-)
-DEFAULT_WORKBOOK = PROJECT_DIR / _SEED_WORKBOOK
+# Fresh installs (packaged or dev) seed from the blank template; real rosters
+# only ever enter through the import flow, so no student data lives in the repo.
+DEFAULT_WORKBOOK = PROJECT_DIR / "roster_template.xlsx"
 DEFAULT_SHEET = "Geo TTh"
 ADDITIONAL_COMMENT_COLUMN = "Additional Comment"
 SECOND_QUIZ_COLUMNS = ("Quiz2 Score", "Second Quiz Score")
@@ -181,26 +174,6 @@ def normalize_uid(value: Any) -> str:
     return str(value).strip()
 
 
-def load_student_row(workbook_path: Path, sheet_name: str, excel_row: int) -> tuple[Any, StudentRow]:
-    workbook = load_workbook(workbook_path)
-    if sheet_name not in workbook.sheetnames:
-        available = ", ".join(workbook.sheetnames)
-        raise ValueError(f"Sheet {sheet_name!r} not found. Available sheets: {available}")
-
-    worksheet = workbook[sheet_name]
-    headers = [worksheet.cell(1, col).value for col in range(1, worksheet.max_column + 1)]
-    values = {
-        str(header): worksheet.cell(excel_row, col).value
-        for col, header in enumerate(headers, start=1)
-        if header
-    }
-
-    if not values.get("First Name") and not values.get("Last Name"):
-        raise ValueError(f"Row {excel_row} does not look like a student row.")
-
-    return workbook, StudentRow(excel_row=excel_row, values=values)
-
-
 def student_from_worksheet(worksheet: Any, headers: list[Any], excel_row: int) -> StudentRow | None:
     values = {
         str(header): worksheet.cell(excel_row, col).value
@@ -356,28 +329,10 @@ def homework_note(is_chinese: bool) -> str:
     return ZH_HOMEWORK_NOTE if is_chinese else EN_HOMEWORK_NOTE
 
 
-def append_homework_note(paragraph: str, is_chinese: bool) -> str:
-    note = homework_note(is_chinese)
-    cleaned = paragraph.strip()
-    if not cleaned or note in cleaned:
-        return cleaned or note
-    if is_chinese:
-        return f"{soften_zh(cleaned)}{note}"
-    return f"{cleaned} {note}"
-
-
 def closing_sentence(is_chinese: bool) -> str:
     if is_chinese:
         return "如果您还有任何问题，可以直接在群里问我，我会尽快回复～"
     return "If you have any questions, feel free to ask me directly in the group chat. I will reply as soon as possible."
-
-
-def append_parent_closing(text: str, is_chinese: bool) -> str:
-    closing = closing_sentence(is_chinese)
-    cleaned = text.strip()
-    if closing in cleaned:
-        return cleaned
-    return f"{cleaned}\n\n{closing}"
 
 
 def join_naturally(items: list[str], language: str) -> str:
@@ -407,35 +362,6 @@ def homework_paragraph(student: StudentRow, is_chinese: bool) -> str | None:
     if not homework.endswith((".", "!", "?")):
         homework += "."
     return f"On the homework, {homework}"
-
-def write_feedback(
-    workbook: Any,
-    workbook_path: Path,
-    sheet_name: str,
-    excel_row: int,
-    feedback: str,
-) -> None:
-    worksheet = workbook[sheet_name]
-    headers = [worksheet.cell(1, col).value for col in range(1, worksheet.max_column + 1)]
-    feedback_col = find_column(headers, "Feedback")
-
-    worksheet.cell(excel_row, feedback_col).value = feedback
-    workbook.save(workbook_path)
-
-def write_column_value(
-    workbook: Any,
-    workbook_path: Path,
-    sheet_name: str,
-    excel_row: int,
-    column_name: str,
-    value: str,
-) -> None:
-    worksheet = workbook[sheet_name]
-    headers = [worksheet.cell(1, col).value for col in range(1, worksheet.max_column + 1)]
-    column = find_column(headers, column_name)
-
-    worksheet.cell(excel_row, column).value = value
-    workbook.save(workbook_path)
 
 def set_column_value(
     worksheet: Any,

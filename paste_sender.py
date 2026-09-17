@@ -36,7 +36,6 @@ from paste_common import (
     JobResult,
     PasteJob,
     clear_clipboard,
-    copy_text_to_clipboard,
     find_window_by_title_re,
 )
 

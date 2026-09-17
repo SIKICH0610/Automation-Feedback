@@ -17,9 +17,6 @@ from feedback_common import (
     normalize_uid,
     set_column_value,
     student_from_worksheet,
-    write_column_value,
-    write_feedback,
-    load_student_row,
 )
 from feedback_master import FeedbackGenerator, generate_feedback
 from feedback_quiz import format_score, score_and_denominator_from_text
