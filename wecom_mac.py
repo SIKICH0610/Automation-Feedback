@@ -329,8 +329,14 @@ class WeComPasteRobotMac:
             return True, "verified_expected_name"
         if uid_ok and name_ok:
             return True, "verified_uid_and_name"
-        if uid_ok or name_ok:
-            return False, "selected_chat_partial_match_only"
+        # The two partial cases are not equally risky: the search key IS the
+        # uid, so a selected row carrying that uid is the group the search
+        # opened (the name may simply not be part of the group's title), while
+        # a name-only match smells like a same-named student's other group.
+        if uid_ok:
+            return False, "partial_uid_only"
+        if name_ok:
+            return False, "partial_name_only"
         return False, "selected_chat_did_not_match"
 
     def focus_compose_box(self) -> bool:

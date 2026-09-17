@@ -1087,19 +1087,31 @@ def _run_wecom_job_mac(job: PasteJob, *, args: argparse.Namespace) -> JobResult:
     )
     print(f"Verification: {reason}")
 
+    # uid is the roster's one true key and the search key itself, so a sidebar
+    # row carrying it counts as the right chat even when the group title lacks
+    # the student's name. Anything less never gets a paste: a name-only match
+    # may be a same-named student's other group.
+    uid_trusted = verified or reason == "partial_uid_only"
+
     if job.action == "check-group-chat":
         # No clear between rows: the next search Cmd+A-selects and overwrites the
         # old key anyway, and skipping the extra round-trip saves over a second
         # per student.
-        status = "verified" if verified else "not_found"
+        status = "verified" if uid_trusted else "not_found"
         print(f"Group chat check: {status}")
         return JobResult(status=status)
 
+    if args.require_verification and not verified:
+        robot.clear_search_state()
+        raise LookupError("WeCom chat could not be verified.")
+    if not uid_trusted:
+        robot.clear_search_state()
+        return JobResult(
+            status="needs_review",
+            error=f"打开的聊天没有通过 uid 核对（{reason}），已跳过粘贴以防贴错群。",
+        )
     if not verified:
-        if args.require_verification:
-            robot.clear_search_state()
-            raise LookupError("WeCom chat could not be verified.")
-        print("WARNING: Could not verify the chat automatically. Continuing because paste-only does not send.")
+        print("uid matched; group title lacks the student's name -- pasting on the uid alone.")
 
     if job.feedback:
         robot.paste_feedback(job.feedback)
