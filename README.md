@@ -381,8 +381,8 @@ install, and `--debug-search-results` prints the candidates the search sees.
 - `feedback_general.py` — regular classroom feedback.
 - `feedback_quiz.py` — quiz score parsing and quiz wording.
 - `feedback_generator.py` — command-line front end for the generators.
-- `geometry_volume1_quiz1_comment_bank.py`, `geometry_volume1_quiz2_comment_bank.py`,
-  `amc10_quiz1_comment_bank.py` — default banks used to seed the database.
+- `data/quiz_banks/*.csv` — quiz-bank seed data, one CSV per bank; adding a
+  course means dropping in another CSV, no code.
 
 **Paste automation** — one module per app per platform, with `paste_sender.py`
 choosing between them at run time. The Windows modules are imported only on Windows,

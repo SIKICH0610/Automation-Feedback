@@ -16,6 +16,8 @@ a = Analysis(
         # database. Deliberately NOT the real roster workbook -- installers get
         # handed to colleagues, and student names/uids must not ride along.
         ("roster_template.xlsx", "."),
+        # Quiz-bank seed CSVs: first-run data for the sqlite store.
+        ("data/quiz_banks", "data/quiz_banks"),
     ],
     hiddenimports=[
         # Lazy imports the runners reach for at job time.

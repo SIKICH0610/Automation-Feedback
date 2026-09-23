@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from quiz_bank_store import (
+    AMC10_QUIZ1_BANK_ID,
     QUIZ1_BANK_ID,
     QUIZ2_BANK_ID,
     QuizBankStoreError,
@@ -28,7 +29,7 @@ class QuizBankStoreTest(unittest.TestCase):
         banks = self.store.list_banks()
         self.assertEqual(
             [bank["id"] for bank in banks],
-            [QUIZ1_BANK_ID, QUIZ2_BANK_ID],
+            [QUIZ1_BANK_ID, QUIZ2_BANK_ID, AMC10_QUIZ1_BANK_ID],
         )
         quiz2 = self.store.load_bank(QUIZ2_BANK_ID)
         self.assertEqual(

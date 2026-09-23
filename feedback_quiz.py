@@ -16,10 +16,8 @@ from feedback_common import (
     join_naturally,
     value_from_any_column,
 )
-from amc10_quiz1_comment_bank import build_amc10_quiz1_comment
-from geometry_volume1_quiz1_comment_bank import build_geometry_volume1_quiz1_comment
-from geometry_volume1_quiz2_comment_bank import build_geometry_volume1_quiz2_comment
 from quiz_bank_store import (
+    AMC10_QUIZ1_BANK_ID,
     QUIZ1_BANK_ID,
     QUIZ2_BANK_ID,
     runtime_quiz_bank_comment,
@@ -234,19 +232,18 @@ def quiz_bank_comment(student: StudentRow, is_chinese: bool, quiz_number: str | 
         return ""
 
     language = "Chinese" if is_chinese else "English"
-    if quiz_bank == "amc10_quiz1":
-        return build_amc10_quiz1_comment(note, language=language)
-    bank_id = QUIZ2_BANK_ID if quiz_bank == "quiz2" else QUIZ1_BANK_ID
-    stored_comment = runtime_quiz_bank_comment(
-        bank_id,
+    # Every bank lives in the sqlite store (seeded from data/quiz_banks/*.csv,
+    # editable in the app); one lookup path, matched by question number only.
+    bank_ids = {
+        "amc10_quiz1": AMC10_QUIZ1_BANK_ID,
+        "quiz2": QUIZ2_BANK_ID,
+        "quiz1": QUIZ1_BANK_ID,
+    }
+    return runtime_quiz_bank_comment(
+        bank_ids[quiz_bank],
         note,
         language=language,
-    )
-    if stored_comment is not None:
-        return stored_comment
-    if quiz_bank == "quiz2":
-        return build_geometry_volume1_quiz2_comment(note, language=language)
-    return build_geometry_volume1_quiz1_comment(note, language=language)
+    ) or ""
 
 def second_quiz_score_sentence(student: StudentRow, is_chinese: bool) -> str:
     text = second_quiz_text(student)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import csv
 from functools import lru_cache
 import json
 import os
@@ -14,6 +15,14 @@ from uuid import uuid4
 
 QUIZ1_BANK_ID = "geometry-volume-1-quiz-1"
 QUIZ2_BANK_ID = "geometry-volume-1-quiz-2"
+AMC10_QUIZ1_BANK_ID = "amc10-intro-quiz-1"
+
+# One CSV per bank. Adding a course means dropping in another CSV (columns:
+# bank_id, class_name, quiz_name, display_name, question, title, chinese,
+# english) -- no code. Files seed the sqlite store on first run only, keyed by
+# bank_id with INSERT OR IGNORE, so entries the teacher edited in the app are
+# never overwritten.
+QUIZ_BANK_SEED_DIR = Path(__file__).resolve().parent / "data" / "quiz_banks"
 
 
 class QuizBankStoreError(Exception):
@@ -21,27 +30,41 @@ class QuizBankStoreError(Exception):
 
 
 def _default_bank_seeds() -> tuple[dict[str, Any], ...]:
-    from geometry_volume1_quiz1_comment_bank import GEOMETRY_VOLUME1_QUIZ1_ISSUES
-    from geometry_volume1_quiz2_comment_bank import GEOMETRY_VOLUME1_QUIZ2_ISSUES
-
-    return (
-        {
-            "id": QUIZ1_BANK_ID,
-            "class_name": "Geometry Volume 1",
-            "quiz_name": "Quiz 1",
-            "display_name": "Geometry Volume 1 Quiz 1",
-            "position": 0,
-            "entries": GEOMETRY_VOLUME1_QUIZ1_ISSUES,
-        },
-        {
-            "id": QUIZ2_BANK_ID,
-            "class_name": "Geometry Volume 1",
-            "quiz_name": "Quiz 2",
-            "display_name": "Geometry Volume 1 Quiz 2",
-            "position": 1,
-            "entries": GEOMETRY_VOLUME1_QUIZ2_ISSUES,
-        },
-    )
+    if not QUIZ_BANK_SEED_DIR.is_dir():
+        return ()
+    banks: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for path in sorted(QUIZ_BANK_SEED_DIR.glob("*.csv")):
+        with open(path, newline="", encoding="utf-8-sig") as handle:
+            for row in csv.DictReader(handle):
+                bank_id = str(row.get("bank_id") or "").strip()
+                if not bank_id:
+                    continue
+                bank = banks.get(bank_id)
+                if bank is None:
+                    bank = {
+                        "id": bank_id,
+                        "class_name": str(row.get("class_name") or "").strip(),
+                        "quiz_name": str(row.get("quiz_name") or "").strip(),
+                        "display_name": str(row.get("display_name") or bank_id).strip(),
+                        "entries": [],
+                    }
+                    banks[bank_id] = bank
+                    order.append(bank_id)
+                question = str(row.get("question") or "").strip()
+                if not question:
+                    continue
+                bank["entries"].append(
+                    {
+                        "question": int(question),
+                        "title": str(row.get("title") or "").strip(),
+                        "chinese": str(row.get("chinese") or "").strip(),
+                        "english": str(row.get("english") or "").strip(),
+                    }
+                )
+    for position, bank_id in enumerate(order):
+        banks[bank_id]["position"] = position
+    return tuple(banks[bank_id] for bank_id in order)
 
 
 def question_numbers_from_note(note: str) -> set[int]:
@@ -186,10 +209,10 @@ class SQLiteQuizBankStore:
                     (
                         str(uuid4()),
                         bank["id"],
-                        issue.question,
-                        issue.title,
-                        issue.chinese,
-                        issue.english,
+                        issue["question"],
+                        issue["title"],
+                        issue["chinese"],
+                        issue["english"],
                         position,
                     ),
                 )
