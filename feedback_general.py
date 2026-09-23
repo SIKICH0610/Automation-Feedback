@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from feedback_common import (
+    ADDITIONAL_COMMENT_COLUMN,
     StudentRow,
     additional_comment_for_local_message,
     join_naturally,
@@ -105,18 +106,25 @@ def general_comment_paragraph(
             return base
         if observations:
             base = (
-                f"{name} 今天整体表现稳定，"
+                f"{name} 课堂整体表现稳定，"
                 f"{join_naturally(observations, student.language)}。之后可以继续保持好的课堂习惯，"
                 "同时在证明逻辑和细节检查上多练习。"
             )
             if additional_comment:
                 return f"{base}{additional_comment}。"
             return base
-        return f"{name} 今天的课堂表现已记录，之后可以继续保持稳定的学习节奏。"
+        # No teacher remark and no observations: the Additional Comment is the only
+        # student-specific thing there is to say, so it leads. It used to be dropped
+        # here entirely, and appending it after the generic line read backwards --
+        # filler first, the real content as an afterthought.
+        raw_additional = str(student.values.get(ADDITIONAL_COMMENT_COLUMN) or "").strip()
+        if raw_additional:
+            return f"{name} {raw_additional}。"
+        return f"{name} 的课堂表现已记录，之后可以继续保持稳定的学习节奏。"
 
     if observations:
         base = (
-            f"{name} had a steady class today and "
+            f"{name} has been steady in class and "
             f"{join_naturally(observations, student.language)}. Continuing to build proof logic "
             "while checking details carefully will be helpful."
         )
@@ -128,4 +136,10 @@ def general_comment_paragraph(
         if additional_comment:
             return f"{base} {additional_comment}."
         return base
-    return f"{name}'s classroom notes have been recorded for today's lesson."
+    raw_additional = str(student.values.get(ADDITIONAL_COMMENT_COLUMN) or "").strip()
+    # Same as the Chinese branch above. The ASCII check mirrors
+    # additional_comment_for_local_message: a note written in Chinese cannot be dropped
+    # unchanged into an English message.
+    if raw_additional and raw_additional.isascii():
+        return f"{name} {raw_additional}."
+    return f"{name}'s classroom notes have been recorded."

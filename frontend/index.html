@@ -1,11 +1,14 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Teacher Feedback Desk</title>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/quiz_bank.css">
   <script src="/app.js" defer></script>
+  <script src="/quiz_bank.js" defer></script>
+  <script src="/import_students.js" defer></script>
 </head>
 <body>
   <div class="app-shell">
@@ -21,130 +24,280 @@
       </div>
     </header>
 
-    <nav id="sheet-tabs" class="sheet-tabs" aria-label="Class sheets"></nav>
+    <nav class="primary-tabs" aria-label="Workspace">
+      <button class="primary-tab is-active" data-view="roster" type="button">Students</button>
+      <button class="primary-tab" data-view="quiz-banks" type="button">Quiz Banks</button>
+      <button class="primary-tab" data-view="import" type="button">Import Students</button>
+    </nav>
 
-    <main class="workspace">
-      <section class="roster-panel" aria-labelledby="roster-title">
+    <div id="roster-view" class="view-panel">
+      <div class="sheet-nav">
+        <select id="semester-select" class="semester-select" aria-label="Semester" hidden></select>
+        <button id="delete-semester" class="text-button delete-semester-button" type="button" hidden>Delete Semester</button>
+        <nav id="sheet-tabs" class="sheet-tabs" aria-label="Class sheets"></nav>
+      </div>
+
+      <main class="workspace">
+        <section class="roster-panel" aria-labelledby="roster-title">
+          <div class="panel-toolbar">
+            <div>
+              <p class="eyebrow">Student sheet</p>
+              <h2 id="roster-title">Roster</h2>
+            </div>
+            <div class="toolbar-controls">
+              <label class="field compact-field">
+                <span>Columns</span>
+                <select id="column-view">
+                  <option value="student">Student info</option>
+                  <option value="general">General feedback</option>
+                  <option value="quiz1">Quiz 1</option>
+                  <option value="quiz2">Quiz 2</option>
+                  <option value="audit">Send status</option>
+                  <option value="all">All columns</option>
+                </select>
+              </label>
+              <div class="field compact-field search-field">
+                <div class="search-label-row">
+                  <label for="student-search">Find student</label>
+                  <select id="search-scope" aria-label="Search scope">
+                    <option value="current">Current class</option>
+                    <option value="all">All classes</option>
+                  </select>
+                </div>
+                <input id="student-search" type="search" placeholder="Name or UID" autocomplete="off">
+                <div id="search-results" class="search-results" role="listbox" aria-label="Student search results" hidden></div>
+              </div>
+              <button id="add-row" class="button secondary" type="button">+ Add student</button>
+              <button id="save-sheet" class="button primary" type="button">Save sheet</button>
+              <div class="overflow-wrap">
+                <button id="toolbar-more" class="button secondary" type="button" aria-haspopup="true">⋯</button>
+                <div id="toolbar-menu" class="overflow-menu" hidden>
+                  <button id="export-excel" class="overflow-item" type="button">Export Excel</button>
+                  <button id="export-report" class="overflow-item" type="button">Export Report</button>
+                  <button id="delete-class" class="overflow-item is-danger" type="button">Delete class</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="selection-strip">
+            <div>
+              <strong id="selection-count">0 selected</strong>
+              <span id="row-count">0 students</span>
+            </div>
+            <button id="select-visible" class="text-button" type="button">Select visible</button>
+            <button id="clear-selection" class="text-button" type="button">Clear</button>
+          </div>
+
+          <div id="table-wrap" class="table-wrap" tabindex="0">
+            <table id="student-table">
+              <thead id="student-head"></thead>
+              <tbody id="student-body"></tbody>
+            </table>
+            <div id="empty-state" class="empty-state" hidden>No student rows match this view.</div>
+          </div>
+        </section>
+
+        <aside class="control-rail">
+          <nav class="rail-tabs" aria-label="Panel">
+            <button class="rail-tab is-active" data-rail="feedback" type="button">反馈 Feedback</button>
+            <button class="rail-tab" data-rail="announce" type="button">通知 Announce</button>
+            <button class="rail-tab" data-rail="bulk" type="button">批量 Bulk</button>
+          </nav>
+
+          <section id="rail-feedback" class="rail-panel side-section" aria-label="Feedback">
+            <div class="segmented-control mode-switch" aria-label="Content mode">
+              <button class="segment is-active" data-mode="general" type="button">课堂反馈</button>
+              <button class="segment" data-mode="quiz1" type="button">Quiz 1</button>
+              <button class="segment" data-mode="quiz2" type="button">Quiz 2</button>
+            </div>
+            <div class="section-heading">
+              <h2 id="recap-title" class="has-tip">本节课内容回顾</h2>
+              <div class="heading-buttons">
+                <button id="ai-recap" class="button secondary small ai-button" type="button" hidden title="关键词自动扩成完整回顾，整段成文则原意润色（本地 AI，生成后请过目修改）">AI 润色</button>
+                <button id="save-recap" class="button secondary small" type="button">Save</button>
+              </div>
+            </div>
+            <textarea id="recap-text" rows="5" placeholder="例如：今天的课程主要围绕三角形全等的判定、勾股定理的应用展开"></textarea>
+            <div id="closing-block">
+              <div class="section-heading">
+                <h2 id="closing-title" class="has-tip" title="生成评语的第三段。留空使用默认模板（作业说明＋结束语）；填写则你的文字原样作为第三段，学生各自的作业反馈仍会附加在后面。">作业与结尾</h2>
+              </div>
+              <textarea id="closing-text" rows="3" placeholder="留空用默认模板；填写则原样作为第三段"></textarea>
+            </div>
+            <button id="action-generate" class="action-button generate" type="button">
+              <span>Generate 生成</span>
+              <small id="generate-target">Writes to Feedback</small>
+            </button>
+            <button id="action-paste" class="action-button paste" type="button">
+              <span>Paste 粘贴</span>
+              <small id="paste-target">Uses Feedback</small>
+            </button>
+          </section>
+
+          <section id="rail-announce" class="rail-panel side-section" aria-label="Announcement" hidden>
+            <div class="section-heading">
+              <h2 id="announcement-title" class="has-tip" title="面向全班群发的公告文字和附件，与逐个学生的反馈无关。粘贴时对每个选中学生的聊天各贴一份，不会自动发送。">Announcement 公告</h2>
+              <div class="heading-buttons">
+                <button id="ai-announce" class="button secondary small ai-button" type="button" hidden title="润色整段通知：只改语言和分段，事实、时间、数字一律不动（本地 AI，含数字校验）">AI 润色</button>
+                <button id="save-announcement" class="button secondary small" type="button">Save</button>
+              </div>
+            </div>
+            <textarea id="announcement-text" rows="10" placeholder="Write the class announcement or course description here"></textarea>
+            <p id="announcement-path" class="file-path"></p>
+            <div class="attachment-toolbar">
+              <div>
+                <p class="group-label">Attachments</p>
+                <span id="attachment-summary">0 files</span>
+              </div>
+              <button id="add-attachment" class="button secondary small" type="button">Add files</button>
+              <input
+                id="attachment-input"
+                type="file"
+                accept=".bmp,.gif,.jpeg,.jpg,.png,.webp,.csv,.doc,.docx,.pdf,.ppt,.pptx,.txt,.xls,.xlsx"
+                multiple
+                hidden
+              >
+            </div>
+            <div id="attachment-list" class="attachment-list"></div>
+            <p id="attachment-empty" class="attachment-empty">No files uploaded for this class.</p>
+            <button class="action-button paste" data-action="paste-announcement" type="button" title="把公告文字和勾选的附件粘贴到每个选中学生的聊天里，不会自动发送。">
+              <span>Paste announcement</span>
+            </button>
+          </section>
+
+          <section id="rail-bulk" class="rail-panel side-section" aria-label="Bulk" hidden>
+            <div class="section-heading">
+              <h2 id="bulk-title" class="has-tip" title="对勾选班级的全部学生运行（当前学期），与表格里选中的行无关。开始前会自动唤出企业微信，结束后自动收回。">Bulk actions 跨班级</h2>
+              <button id="bulk-toggle-all" class="text-button" type="button">None</button>
+            </div>
+            <div class="channel-row">
+              <p class="group-label">Search in</p>
+              <div id="channel-switch" class="segmented-control" aria-label="Which app to search">
+                <button class="channel-segment is-active" data-channel="auto" type="button">Auto</button>
+                <button class="channel-segment" data-channel="wecom" type="button">WeCom</button>
+                <button class="channel-segment" data-channel="whatsapp" type="button">WhatsApp</button>
+              </div>
+            </div>
+            <div id="bulk-class-list" class="bulk-class-list"></div>
+            <p id="bulk-summary" class="bulk-hint">0 students</p>
+            <button id="bulk-generate" class="action-button generate" type="button" title="为勾选班级的每个学生重新生成评语，覆盖 Feedback 列（每个班用自己的回顾和结尾）。">
+              <span>Generate comments</span>
+            </button>
+            <button id="bulk-check" class="action-button paste" type="button" title="按上面选的渠道逐个学生查群聊，把结果写进 Group Chat 列，不会打开或发送消息。">
+              <span>Check group chats</span>
+            </button>
+            <button id="bulk-paste" class="action-button paste" type="button" title="逐个学生把 Feedback 粘贴进聊天框，停在预览，绝不自动发送。">
+              <span>Paste comments</span>
+            </button>
+          </section>
+
+          <div class="log-block">
+            <button id="log-toggle" class="text-button log-toggle" type="button">
+              <span id="log-caret">▸</span> Activity <span id="log-last" class="log-last"></span>
+            </button>
+            <div id="log-body" hidden>
+              <pre id="activity-log" aria-live="polite">Ready.</pre>
+              <button id="clear-log" class="text-button" type="button">Clear</button>
+            </div>
+          </div>
+        </aside>
+      </main>
+    </div>
+
+    <section id="quiz-bank-view" class="quiz-bank-workspace view-panel" hidden>
+      <aside class="quiz-bank-directory">
+        <div class="directory-heading">
+          <p class="eyebrow">Feedback library</p>
+          <h2>Quiz Banks</h2>
+        </div>
+        <nav id="quiz-bank-list" class="quiz-bank-list" aria-label="Quiz banks"></nav>
+      </aside>
+
+      <main class="quiz-bank-editor">
+        <div class="bank-toolbar">
+          <div>
+            <p class="eyebrow">Editable feedback</p>
+            <div class="bank-title-row">
+              <h2 id="quiz-bank-title">Quiz Bank</h2>
+              <span id="bank-entry-count" class="bank-count">0 questions</span>
+              <span id="bank-save-state" class="bank-save-state is-saved">Saved</span>
+            </div>
+          </div>
+          <div class="bank-toolbar-actions">
+            <button id="add-bank-entry" class="button secondary" type="button">+ Add question</button>
+            <button id="save-quiz-bank" class="button primary" type="button">Save bank</button>
+          </div>
+        </div>
+
+        <div class="bank-meta">
+          <label class="field">
+            <span>Display name</span>
+            <input id="bank-display-name" type="text">
+          </label>
+          <label class="field">
+            <span>Class name</span>
+            <input id="bank-class-name" type="text">
+          </label>
+          <label class="field">
+            <span>Quiz name</span>
+            <input id="bank-quiz-name" type="text">
+          </label>
+        </div>
+
+        <div id="quiz-bank-entries" class="quiz-bank-entries"></div>
+        <div id="quiz-bank-empty" class="bank-empty-state" hidden>
+          No questions in this bank.
+        </div>
+      </main>
+    </section>
+
+    <section id="import-view" class="import-workspace view-panel" hidden>
+      <main class="import-panel">
         <div class="panel-toolbar">
           <div>
-            <p class="eyebrow">Student sheet</p>
-            <h2 id="roster-title">Roster</h2>
-          </div>
-          <div class="toolbar-controls">
-            <label class="field compact-field">
-              <span>Columns</span>
-              <select id="column-view">
-                <option value="student">Student info</option>
-                <option value="general">General feedback</option>
-                <option value="quiz1">Quiz 1</option>
-                <option value="quiz2">Quiz 2</option>
-                <option value="audit">Send status</option>
-                <option value="all">All columns</option>
-              </select>
-            </label>
-            <div class="field compact-field search-field">
-              <div class="search-label-row">
-                <label for="student-search">Find student</label>
-                <select id="search-scope" aria-label="Search scope">
-                  <option value="current">Current class</option>
-                  <option value="all">All classes</option>
-                </select>
-              </div>
-              <input id="student-search" type="search" placeholder="Name or UID" autocomplete="off">
-              <div id="search-results" class="search-results" role="listbox" aria-label="Student search results" hidden></div>
-            </div>
-            <button id="add-row" class="button secondary" type="button">+ Add student</button>
-            <button id="export-excel" class="button secondary" type="button">Export Excel</button>
-            <button id="save-sheet" class="button primary" type="button">Save sheet</button>
+            <p class="eyebrow">Bulk roster import</p>
+            <h2>Import Students</h2>
           </div>
         </div>
 
-        <div class="selection-strip">
-          <div>
-            <strong id="selection-count">0 selected</strong>
-            <span id="row-count">0 students</span>
-          </div>
-          <button id="select-visible" class="text-button" type="button">Select visible</button>
-          <button id="clear-selection" class="text-button" type="button">Clear</button>
+        <p class="import-intro">
+          Import a platform enrollment export (.xlsx). Only paid, enrolled rows are imported.
+          Type a new semester name to create it, or pick an existing one to add classes into it.
+        </p>
+
+        <div class="import-form">
+          <label class="field">
+            <span>Enrollment export file (.xlsx)</span>
+            <input id="import-file" type="file" accept=".xlsx,.csv,.json">
+          </label>
+          <label class="field">
+            <span>Semester</span>
+            <input id="import-semester" type="text" list="import-semester-options" placeholder="e.g. 2026-27 School Year" autocomplete="off">
+            <datalist id="import-semester-options"></datalist>
+          </label>
+          <button id="import-preview" class="button secondary" type="button">Preview</button>
         </div>
 
-        <div id="table-wrap" class="table-wrap" tabindex="0">
-          <table id="student-table">
-            <thead id="student-head"></thead>
-            <tbody id="student-body"></tbody>
-          </table>
-          <div id="empty-state" class="empty-state" hidden>No student rows match this view.</div>
+        <label class="import-overwrite-toggle">
+          <input id="import-overwrite" type="checkbox">
+          <span>
+            <strong>Overwrite existing roster</strong>
+            <small>Removes any student on a matched class's roster who is not in this file. Everyone else keeps all their existing feedback and notes untouched. Only affects classes already found in this file, not your whole roster.</small>
+          </span>
+        </label>
+
+        <p id="import-empty" class="import-empty">Choose a file and semester, then preview before importing.</p>
+
+        <div id="import-plan" class="import-plan" hidden>
+          <div class="import-plan-header">
+            <strong id="import-semester-summary"></strong>
+            <button id="import-commit" class="button primary" type="button">Commit Import</button>
+          </div>
+          <div id="import-classes" class="import-classes"></div>
         </div>
-      </section>
-
-      <aside class="control-rail">
-        <section class="side-section announcement-section" aria-labelledby="announcement-title">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Linked file</p>
-              <h2 id="announcement-title">Announcement</h2>
-            </div>
-            <button id="save-announcement" class="button secondary small" type="button">Save</button>
-          </div>
-          <textarea id="announcement-text" rows="12" placeholder="Write the class announcement or course description here"></textarea>
-          <p id="announcement-path" class="file-path"></p>
-        </section>
-
-        <section class="side-section action-section" aria-labelledby="actions-title">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Selected students</p>
-              <h2 id="actions-title">Actions</h2>
-            </div>
-          </div>
-
-          <div class="action-group">
-            <p class="group-label">General</p>
-            <button class="action-button generate" data-action="generate-comments" type="button">
-              <span>Generate comments</span>
-              <small>Writes to Feedback</small>
-            </button>
-            <button class="action-button paste" data-action="paste-announcement" type="button">
-              <span>Paste announcement</span>
-              <small>Shared text</small>
-            </button>
-            <button class="action-button paste" data-action="paste-comments" type="button">
-              <span>Paste comments</span>
-              <small>Student-specific text</small>
-            </button>
-          </div>
-
-          <div class="action-group">
-            <div class="quiz-heading">
-              <p class="group-label">Quiz</p>
-              <div class="segmented-control" aria-label="Quiz number">
-                <button class="segment is-active" data-quiz="1" type="button">Quiz 1</button>
-                <button class="segment" data-quiz="2" type="button">Quiz 2</button>
-              </div>
-            </div>
-            <button class="action-button generate" data-action="generate-quiz-feedback" type="button">
-              <span>Generate quiz feedback</span>
-              <small id="quiz-generate-target">Writes to Quiz1 Feedback</small>
-            </button>
-            <button class="action-button paste" data-action="paste-quiz-feedback" type="button">
-              <span>Paste quiz feedback</span>
-              <small id="quiz-paste-target">Uses Quiz1 Feedback</small>
-            </button>
-          </div>
-        </section>
-
-        <section class="side-section activity-section" aria-labelledby="activity-title">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Latest run</p>
-              <h2 id="activity-title">Activity</h2>
-            </div>
-            <button id="clear-log" class="text-button" type="button">Clear</button>
-          </div>
-          <pre id="activity-log" aria-live="polite">Ready.</pre>
-        </section>
-      </aside>
-    </main>
+      </main>
+    </section>
   </div>
 
   <div id="busy-overlay" class="busy-overlay" hidden>
@@ -152,12 +305,14 @@
       <div class="spinner"></div>
       <strong id="busy-title">Working</strong>
       <span id="busy-detail">Please keep this window open.</span>
+      <div id="busy-progress" class="busy-progress" hidden>
+        <div class="progress-track"><div id="busy-progress-fill" class="progress-fill"></div></div>
+        <p id="busy-progress-text" class="busy-progress-text"></p>
+      </div>
+      <button id="busy-cancel" class="button danger busy-cancel" type="button" hidden>取消 Cancel</button>
     </div>
   </div>
 
   <div id="toast-region" class="toast-region" aria-live="polite"></div>
 </body>
 </html>
-
-
-

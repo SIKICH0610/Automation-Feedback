@@ -4,13 +4,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from openpyxl import load_workbook
-
-from openai_api import DEFAULT_OPENAI_MODEL, create_response
 
 
 PROJECT_DIR = Path(__file__).resolve().parent
-DEFAULT_WORKBOOK = PROJECT_DIR / "Geo_TTh_Student_Script_fixed_rows_only.xlsx"
+# Fresh installs (packaged or dev) seed from the blank template; real rosters
+# only ever enter through the import flow, so no student data lives in the repo.
+DEFAULT_WORKBOOK = PROJECT_DIR / "roster_template.xlsx"
 DEFAULT_SHEET = "Geo TTh"
 ADDITIONAL_COMMENT_COLUMN = "Additional Comment"
 SECOND_QUIZ_COLUMNS = ("Quiz2 Score", "Second Quiz Score")
@@ -23,9 +22,6 @@ FIRST_QUIZ_SCORE_COLUMNS = (
     "Second Feedback",
     "Second Feeback",
 )
-<<<<<<< Updated upstream
-QUIZ_AVERAGE_COLUMNS = ("Quiz1 Average", "Quiz Average", "Class Quiz Average", "First Quiz Average", "Average Quiz Score")
-=======
 QUIZ_AVERAGE_COLUMNS = (
     "Quiz1 Average",
     "Quiz Average",
@@ -33,7 +29,6 @@ QUIZ_AVERAGE_COLUMNS = (
     "First Quiz Average",
     "Average Quiz Score",
 )
->>>>>>> Stashed changes
 SECOND_QUIZ_AVERAGE_COLUMNS = ("Quiz2 Average", "Second Quiz Average")
 QUIZ_BANK_COLUMNS = ("Quiz Bank", "Quiz Type", "Quiz Name")
 QUIZ1_MISTAKE_COLUMNS = ("Quiz1 Mistake", "Quiz1 Mistakes", "First Quiz Mistake", "First Quiz Mistakes")
@@ -47,32 +42,6 @@ QUIZ_MISTAKE_COLUMNS = (
     "Quiz Mistakes",
 )
 FEEDBACK_TYPE_CHOICES = ("comprehensive", "general", "quiz")
-
-
-PARENT_COMMENT_STYLE_GUIDE = """
-Write like a real teacher leaving a thoughtful parent update.
-Blend quiz performance, classroom behavior, and next steps into natural paragraphs.
-Do not use label-style sections, checklist wording, or repeated sentence frames.
-Avoid structures like "Regarding the student's performance" or "The main suggestions are".
-When several areas need work, vary the phrasing so it sounds spoken rather than copied from a template.
-Use natural sentence breaks instead of colons or semicolons.
-End with the standard group-chat question sentence.
-""".strip()
-
-ZH_PARENT_COMMENT_STYLE_GUIDE = """
-中文家长反馈要像老师真实写给家长的消息。
-开头可以保留“家长您好”，之后不要反复说“家长”，统一用“您”。
-不要写成“关于某某的课堂表现”或“建议后续关注”这种模板句。
-如果有多个需要改进的地方，第二个及之后可以自然加入“也”，例如“计算细节也需要更加仔细”。
-语气要具体、温和、顺口，像在群里发给家长的说明。
-""".strip()
-
-EN_PARENT_COMMENT_STYLE_GUIDE = """
-English parent feedback should sound like a natural teacher update.
-Do not use report-style labels or repeated template openings.
-Connect the quiz result, class habits, and next step in a smooth paragraph.
-Keep the tone warm, direct, and parent-friendly.
-""".strip()
 
 
 EN_PHRASES = {
@@ -205,26 +174,6 @@ def normalize_uid(value: Any) -> str:
     return str(value).strip()
 
 
-def load_student_row(workbook_path: Path, sheet_name: str, excel_row: int) -> tuple[Any, StudentRow]:
-    workbook = load_workbook(workbook_path)
-    if sheet_name not in workbook.sheetnames:
-        available = ", ".join(workbook.sheetnames)
-        raise ValueError(f"Sheet {sheet_name!r} not found. Available sheets: {available}")
-
-    worksheet = workbook[sheet_name]
-    headers = [worksheet.cell(1, col).value for col in range(1, worksheet.max_column + 1)]
-    values = {
-        str(header): worksheet.cell(excel_row, col).value
-        for col, header in enumerate(headers, start=1)
-        if header
-    }
-
-    if not values.get("First Name") and not values.get("Last Name"):
-        raise ValueError(f"Row {excel_row} does not look like a student row.")
-
-    return workbook, StudentRow(excel_row=excel_row, values=values)
-
-
 def student_from_worksheet(worksheet: Any, headers: list[Any], excel_row: int) -> StudentRow | None:
     values = {
         str(header): worksheet.cell(excel_row, col).value
@@ -287,32 +236,6 @@ def phrase_for(field: str, value: Any, language: str) -> str | None:
     return phrases.get(field, {}).get(text, text)
 
 
-def target_language(student: StudentRow) -> str:
-    if student.language.lower().startswith("chinese"):
-        return "Chinese"
-    return "English"
-
-
-def revise_remark_with_gpt(student: StudentRow, model: str) -> str:
-    remark = str(student.values.get("Remark for Student") or "").strip()
-    if not remark:
-        return ""
-
-    prompt = f"""
-You are revising a teacher's private classroom note before it is saved back to the spreadsheet.
-
-Keep the meaning and all important details.
-The teacher note may be informal Chinese. Revise it into smooth, concise Chinese.
-Do not add a greeting, parent-facing wording, homework, or information not in the note.
-Output only the revised Chinese note.
-
-Student: {student.full_name}
-Original note:
-{remark}
-""".strip()
-    return create_response(prompt, model=model)
-
-
 def additional_comment_for_local_message(student: StudentRow, is_chinese: bool) -> str:
     additional_comment = str(student.values.get(ADDITIONAL_COMMENT_COLUMN) or "").strip()
     if not additional_comment:
@@ -332,81 +255,52 @@ def value_from_any_column(student: StudentRow, column_names: tuple[str, ...]) ->
     return ""
 
 
-def personal_feedback_with_gpt(
-    student: StudentRow,
-    *,
-    observations: list[str],
-    local_comment: str,
-    homework: str | None,
-    model: str,
-    feedback_type: str = "comprehensive",
-) -> str:
-    language = target_language(student)
-    remark = str(student.values.get("Remark for Student") or "").strip()
-    additional_comment = str(student.values.get(ADDITIONAL_COMMENT_COLUMN) or "").strip()
-    homework_text = homework or ""
-    language_style = (
-        ZH_PARENT_COMMENT_STYLE_GUIDE
-        if language.lower().startswith("chinese")
-        else EN_PARENT_COMMENT_STYLE_GUIDE
-    )
-
-    prompt = f"""
-You are writing the student-specific part of a parent class update.
-
-Write in {language}.
-Follow this teacher style guide:
-{PARENT_COMMENT_STYLE_GUIDE}
-
-Language-specific style guide:
-{language_style}
-
-Do not mention "not observed".
-Do not include attendance.
-Do not include the class material paragraph.
-Do not end with generic thanks or "thank you for your cooperation".
-If Additional Comment is provided, translate it if needed and add it naturally to the end of paragraph 2.
-Feedback mode: {feedback_type}.
-For general mode, focus on regular classroom feedback and teacher-written notes rather than quiz scores.
-For quiz mode, focus on quiz scores, proof-writing issues, and quiz-specific next steps.
-For comprehensive mode, include both quiz information and regular classroom feedback.
-End with this sentence in Chinese messages: 如果您还有任何问题，可以直接在群里问我，我会尽快回复。
-End with this sentence in English messages: If you have any questions, feel free to ask me directly in the group chat. I will reply as soon as possible.
-
-Output paragraph 2 as the personal comment.
-If homework feedback is provided, add paragraph 3 as homework feedback.
-If there is no homework feedback, output only paragraph 2.
-
-Student: {student.full_name}
-Teacher remark, usually in Chinese:
-{remark}
-
-Additional Comment:
-{additional_comment or "None"}
-
-Structured observations:
-{join_naturally(observations, student.language) or "None"}
-
-Local fallback draft:
-{local_comment}
-
-Homework feedback:
-{homework_text or "None"}
-""".strip()
-    return create_response(prompt, model=model)
+# The teacher writes only the topics covered ("三角形全等的判定、勾股定理的应用"), and
+# the greeting and sentence frame are added here, so every message opens the same warm
+# way without the teacher retyping it. A recap that already reads as a full sentence
+# (it ends with its own punctuation) is kept verbatim instead of being forced into the
+# frame, which would otherwise produce "主要围绕我们复习了...展开".
+ZH_RECAP_SENTENCE_ENDINGS = ("。", "！", "？", "～", "~", ".", "!", "?")
 
 
-def class_review_paragraph(class_review: str, is_chinese: bool) -> str:
+def soften_zh(text: str) -> str:
+    """Trade a final full stop for a wave dash, the way a teacher texting a parent would."""
+    stripped = text.rstrip()
+    if stripped.endswith("。"):
+        return stripped[:-1] + "～"
+    if stripped.endswith(ZH_RECAP_SENTENCE_ENDINGS):
+        return stripped
+    return stripped + "～"
+
+
+def class_review_paragraph(class_review: str, is_chinese: bool, *, kind: str = "lesson") -> str:
+    """Paragraph 1: the greeting plus whatever the teacher wrote, verbatim.
+
+    A written recap only ever gets "家长您好～" put in front of it -- the
+    "今天的课程主要围绕...展开" sentence frame is exclusively the fallback for an
+    empty box, so the teacher's own wording is never rewritten around. kind picks
+    which fallback fits (lesson vs quiz)."""
     class_review = class_review.strip()
-    if class_review:
-        return class_review
 
     if is_chinese:
-        return "今天课堂主要围绕本节几何课的核心概念、例题讲解和课堂练习展开。"
-    return (
-        "In today's class, we reviewed the main geometry ideas for the lesson, "
-        "worked through examples, and practiced applying the methods in class."
-    )
+        if not class_review:
+            if kind == "quiz":
+                return "家长您好～这次 quiz 的情况如下～"
+            return "家长您好～我们的课程主要围绕核心知识点、例题讲解和课堂练习展开～"
+        if class_review.startswith("家长"):
+            return soften_zh(class_review)
+        return f"家长您好～{soften_zh(class_review)}"
+
+    if not class_review:
+        if kind == "quiz":
+            return "Hello parents! Here is how this quiz went."
+        return (
+            "Hello parents! Our classes have focused on the core ideas, "
+            "worked through examples, and practiced applying the methods."
+        )
+    if class_review.lower().startswith(("hello", "dear")):
+        return class_review
+    return f"Hello parents! {class_review}" + ("" if class_review.endswith((".", "!", "?")) else ".")
 
 
 def clean_parent_feedback_text(text: str) -> str:
@@ -418,36 +312,27 @@ def clean_parent_feedback_text(text: str) -> str:
     return cleaned.replace("家长", "您")
 
 
+# Standing note about how homework works, appended to the personal comment so every
+# parent gets the submission instructions without the teacher retyping them.
+ZH_HOMEWORK_NOTE = (
+    "我们的作业是配套的课后练习，孩子做完之后可以在 app 上提交，"
+    "会有一些 coin 可以兑换小礼品～我也会及时查看作业，了解孩子的学习状况～"
+)
+EN_HOMEWORK_NOTE = (
+    "The homework matches what we covered in class. Once your child finishes it, "
+    "they can submit it in the app and earn coins to redeem small prizes. I will "
+    "review each submission so I can keep track of how your child is doing."
+)
+
+
+def homework_note(is_chinese: bool) -> str:
+    return ZH_HOMEWORK_NOTE if is_chinese else EN_HOMEWORK_NOTE
+
+
 def closing_sentence(is_chinese: bool) -> str:
     if is_chinese:
-        return "如果您还有任何问题，可以直接在群里问我，我会尽快回复。"
+        return "如果您还有任何问题，可以直接在群里问我，我会尽快回复～"
     return "If you have any questions, feel free to ask me directly in the group chat. I will reply as soon as possible."
-
-
-def append_parent_closing(text: str, is_chinese: bool) -> str:
-    closing = closing_sentence(is_chinese)
-    cleaned = text.strip()
-    if closing in cleaned:
-        return cleaned
-    return f"{cleaned}\n\n{closing}"
-
-
-def sentence_join_zh(items: list[str]) -> str:
-    if not items:
-        return ""
-    if len(items) == 1:
-        return items[0]
-    sentences = [items[0]]
-    for item in items[1:]:
-        if "也" in item or item.startswith(("同时", "特别", "可以", "继续")):
-            sentences.append(item)
-        elif "还需要" in item:
-            sentences.append(item.replace("还需要", "也需要", 1))
-        elif "需要" in item:
-            sentences.append(item.replace("需要", "也需要", 1))
-        else:
-            sentences.append(item)
-    return "。".join(sentences)
 
 
 def join_naturally(items: list[str], language: str) -> str:
@@ -462,41 +347,21 @@ def join_naturally(items: list[str], language: str) -> str:
     return ", ".join(items[:-1]) + f", and {items[-1]}"
 
 def homework_paragraph(student: StudentRow, is_chinese: bool) -> str | None:
+    """The teacher's Homework Reflection, ready to sit inside the middle paragraph.
+
+    It follows the standing homework note (which already introduces the topic), so
+    no "作业反馈：" style label -- the note flows straight into the reflection. A
+    colon label also read badly after clean_parent_feedback_text turned the colon
+    into a comma.
+    """
     homework = str(student.values.get("Homework Reflection") or "").strip()
     if not homework:
         return None
     if is_chinese:
-        return f"作业反馈：{homework}"
-    return f"Homework feedback: {homework}"
-
-def write_feedback(
-    workbook: Any,
-    workbook_path: Path,
-    sheet_name: str,
-    excel_row: int,
-    feedback: str,
-) -> None:
-    worksheet = workbook[sheet_name]
-    headers = [worksheet.cell(1, col).value for col in range(1, worksheet.max_column + 1)]
-    feedback_col = find_column(headers, "Feedback")
-
-    worksheet.cell(excel_row, feedback_col).value = feedback
-    workbook.save(workbook_path)
-
-def write_column_value(
-    workbook: Any,
-    workbook_path: Path,
-    sheet_name: str,
-    excel_row: int,
-    column_name: str,
-    value: str,
-) -> None:
-    worksheet = workbook[sheet_name]
-    headers = [worksheet.cell(1, col).value for col in range(1, worksheet.max_column + 1)]
-    column = find_column(headers, column_name)
-
-    worksheet.cell(excel_row, column).value = value
-    workbook.save(workbook_path)
+        return soften_zh(homework)
+    if not homework.endswith((".", "!", "?")):
+        homework += "."
+    return f"On the homework, {homework}"
 
 def set_column_value(
     worksheet: Any,

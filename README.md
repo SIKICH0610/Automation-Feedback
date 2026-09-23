@@ -1,35 +1,22 @@
 # Automation Feedback
 
-Generate one parent-facing feedback entry from the provided Excel tracker.
+A local app for writing parent-facing class feedback and pasting it into WeCom or
+WhatsApp. It runs entirely on the teacher's own computer: a small web server plus a
+browser interface at `http://127.0.0.1:8765`.
 
-## Project Files
+Nothing is ever sent automatically. The paste helper opens the right chat and fills in
+the message box, then stops — a person reads it and presses Send.
 
-- `database_store.py`: SQLite roster storage, one-time Excel migration, temporary action workbooks, and safe exports.
-- `frontend_server.py`: local browser interface and action runner.
-- `frontend/`: editable roster, announcements, quiz fields, feedback generation, paste controls, and Excel export.
-- `feedback_generator.py`: CLI wrapper for previewing or writing feedback into the existing `Feedback` cells.
-- `feedback_common.py`: shared workbook, student-row, wording, and formatting helpers.
-- `feedback_general.py`: regular classroom-feedback wording.
-- `feedback_quiz.py`: quiz-score parsing and quiz-feedback wording.
-- `feedback_master.py`: master generator that can call general, quiz, or comprehensive feedback.
-- `paste_sender.py`: CLI wrapper for supervised paste actions. It checks app status and never sends.
-- `paste_comment.py`: row-specific comment payload selection.
-- `paste_mass_notification.py`: shared mass-notification payload selection.
-- `class_review_builder.py`: create or overwrite `class_review.txt` from teacher text, notes, or slides.
-- `workbook_setup.py`: prepare optional workbook columns such as `Additional Comment`.
-- `openai_api.py`: shared OpenAI API helper.
-- `class_review.txt`: editable class-level paragraph used as paragraph 1.
-- `Geo_TTh_Student_Script_fixed_rows_only.xlsx`: one-time import source for the frontend and default workbook for direct CLI commands.
+## How the data is stored
 
-The initial Excel feedback form lives in this project folder:
+`app_data/feedback.db` (SQLite) is the source of truth for classes, students, quiz
+banks, and attachments. On the very first launch, an Excel workbook is imported once to
+create that database; after that the app never reads it again, and editing that
+spreadsheet does not change anything.
 
-```text
-Geo_TTh_Student_Script_fixed_rows_only.xlsx
-```
-
-On the first frontend launch, its sheets and student rows are imported into `app_data/feedback.db`. After that migration, the frontend, generators, and paste actions use SQLite as the live source of truth. Editing the original `.xlsx` file does not change the frontend database.
-
-Direct command-line scripts still use the workbook passed with `--workbook`. Those legacy CLI writes do not update the frontend database unless they are launched through the frontend action buttons.
+Back up the live system by copying `app_data/feedback.db` while the server is stopped.
+`app_data/`, `exports/`, and `announcements/` are gitignored so student data is not
+committed by accident.
 
 ## Setup
 
@@ -39,224 +26,379 @@ First-time setup on Windows:
 .\setup.ps1
 ```
 
-This creates a local `.venv` folder and installs the required packages there. VS Code is configured to use `.venv\Scripts\python.exe` for this workspace, so it will not accidentally use Python from another project.
+First-time setup on macOS:
 
-Optional API key for GPT-assisted workflows:
-
-```powershell
-$env:OPENAI_API_KEY="your_api_key_here"
+```bash
+./setup.sh
 ```
 
-## Local frontend
+This creates a local `.venv` and installs the dependencies into it, so the project never
+picks up Python from somewhere else. VS Code is pointed at that interpreter.
 
-Start the editable workbook interface:
+### macOS only: Accessibility permission
+
+WeCom paste automation on macOS drives the app through the Accessibility API, which
+macOS gates behind an explicit grant. The permission has to be given to the **Python
+interpreter itself**. Find its real path:
+
+```bash
+readlink -f .venv/bin/python
+```
+
+Add that exact path (not `.venv/bin/python`, which is only a symlink) in **System
+Settings → Privacy & Security → Accessibility**, and switch it on.
+
+Then **fully quit and restart the server**. A process that was already running when the
+permission was granted keeps its old, unpermitted state, and every Accessibility call
+fails with `osascript is not allowed assistive access`.
+
+## Running the app
 
 ```powershell
 .\.venv\Scripts\python.exe frontend_server.py
 ```
 
-The app opens at `http://127.0.0.1:8765`. Each class sheet has its own linked UTF-8 announcement file in `announcements`. The frontend saves student edits into `app_data/feedback.db`, generates general or quiz feedback, and runs the supervised paste-only workflow for selected rows.
-
-The original workbook is imported only when the database is created for the first time. Use **Export Excel** in the roster toolbar when you need a spreadsheet copy. The export is written to `exports/Student_Feedback_Export.xlsx`. Editing that exported file does not change the live database.
-
-To back up the live system, copy `app_data/feedback.db` while the frontend is stopped. The `app_data`, `exports`, and `announcements` folders are ignored by Git so private student data is not committed accidentally.
-
-Close the terminal or press `Ctrl+C` to stop the local server.
-
-## Prepare the workbook
-
-Add the optional automation helper columns to every sheet:
-
-```powershell
-python workbook_setup.py
+```bash
+./.venv/bin/python frontend_server.py
 ```
 
-This prepares `Additional Comment`, `Preferred Channel`, WhatsApp routing fields, and send audit fields. Use `Additional Comment` for extra notes that should be added to the end of paragraph 2. In API mode, the note is translated when needed.
+It opens `http://127.0.0.1:8765` in the browser. Keep the terminal open while using it;
+`Ctrl+C` stops the server.
 
-Routing columns:
+## Writing feedback
 
-- `Preferred Channel`: optional `wecom` or `whatsapp`. Blank uses `Parent Language`: Chinese -> WeCom, non-Chinese -> WhatsApp.
-- `WhatsApp Phone`: parent phone number for direct WhatsApp phone URL mode.
-- `WhatsApp Search Key`: optional group-chat search key. Blank uses `uid`.
-- `WhatsApp Target Type`: optional `phone` or `group_search`. Blank uses `phone` when `WhatsApp Phone` is present, otherwise `group_search`.
+### Lesson recap → the opening paragraph
 
-## Create the class review file
+The right-hand rail has three tabs — **反馈 Feedback** (the daily workflow), **通知
+Announce** (announcement + attachments), and **批量 Bulk** (whole-semester runs). The
+Feedback tab is driven by one content-mode switch: **课堂反馈 | Quiz 1 | Quiz 2**. A
+single recap box, one Generate button, and one Paste button all follow the mode, and
+the roster's column view switches with it, so what Generate writes is what you see.
 
-The editable class review file lives in this project folder as `class_review.txt`.
-Teachers can edit that file directly before generating feedback.
-When new slides or class notes are provided, run `class_review_builder.py` again and it will overwrite `class_review.txt`.
+The recap box (in 课堂反馈 mode, the **Lesson recap 本节课内容回顾**) is what the
+generated comment opens with. Your wording is used verbatim — the only thing added is the
+greeting in front:
 
-Teacher-written text:
+> recap: `今天的课程主要围绕三角形全等的判定、勾股定理的应用展开`
+> becomes: 家长您好～今天的课程主要围绕三角形全等的判定、勾股定理的应用展开～
 
-```powershell
-python class_review_builder.py --source-text "Today we discussed triangle similarity, matching corresponding angles and sides, and setting up proof statements from diagrams." --output class_review.txt
+Left empty, a generic recap sentence fills in after the greeting instead. A recap that
+already starts with 家长 is kept whole, greeting and all.
+
+This is deliberately **separate from the Announcement box**. The announcement is text
+you blast to a whole class, and reusing it here used to put things like "next week is
+cancelled" at the top of every student's individual feedback.
+
+### Generate comments
+
+Select students, then **Generate comments**. Every message is exactly three paragraphs:
+the greeting with the lesson recap; the student's classroom performance, built from the
+dropdown observations and the teacher's `Remark for Student` note; and a final paragraph
+with the standing homework/app/coin note, any `Homework Reflection`, and the closing
+line. The **Closing 第三段** box (below the recap, 课堂反馈 mode only) overrides that
+final paragraph verbatim when filled — for exam reminders and the like — with a
+per-student `Homework Reflection` still appended; leave it empty for the default.
+Results land in the `Feedback` column, where you can edit them before pasting —
+click a long cell and it floats open as a full-size box in place.
+
+Absent students are skipped. Fields marked `Not Observed` are left out.
+`Additional Comment` is appended to the end of the personal paragraph.
+
+### Quiz feedback
+
+Pick **Quiz 1** or **Quiz 2** with the content-mode switch. Each quiz keeps **its own
+recap** — the box swaps to it, and it is used as paragraph 1 of that quiz's message
+only — the two quizzes are written up and sent separately.
+
+**Generate quiz feedback** then writes into `Quiz1 Feedback` / `Quiz2 Feedback`, using
+only that quiz's score and average. The quiz you picked is passed through explicitly, so
+a student who has both quizzes recorded can no longer get Quiz 2's score reported inside
+their Quiz 1 message.
+
+Open **Quiz Banks** in the top navigation to edit the per-question feedback: a bank is
+simply question number → explanation (Chinese/English). The teacher types the missed
+question numbers into `QuizN Mistake` ("3, 5", "第3题", "Q3-5" all parse), and each
+number pulls its explanation — there is no keyword matching. Banks live in the
+database; the Python bank files seed a bank only the first time it is created, and
+after that the editor is the live source.
+
+### AI 扩写 / 润色（本地，可选）
+
+With [Ollama](https://ollama.com) installed (`brew install ollama && ollama serve`,
+plus `ollama pull qwen2.5:7b` — 3b on 8GB machines, picked automatically), three AI
+buttons appear; without Ollama they stay hidden and nothing else changes:
+
+- **AI 扩写** on the Remark/Additional-Comment cell editor: keywords → a short
+  parent-facing paragraph, in the teacher's own voice (a few of their past comments
+  are used as live style examples, pulled from the local database and never bundled).
+- **AI 扩写** on the recap box: topic keywords → the one-line recap.
+- **AI 润色** on the announcement: sentence-conservative polish that never touches
+  facts.
+
+When Ollama is available, **Generate comments automatically writes the personal
+paragraph with the AI** for Chinese rows that have real material (remark /
+observations / additional comment) — teacher shorthand is rewritten into
+parent-facing wording, never echoed — with the template as the fallback for empty
+rows, English rows, and any AI failure. Expect a few seconds per student instead of
+an instant run; the progress bar tracks each row.
+
+Every draft passes a fact guard — no digits may appear that the teacher didn't type,
+an announcement may not lose one, and invented temporal glosses ("考试结束后…") are
+rejected — with one automatic retry, then a clear refusal. Drafts land in the input
+box for the teacher to review and edit; nothing AI-written enters a message unseen.
+Each accepted draft is logged to `app_data/ai_corpus.jsonl` (local only) as future
+fine-tuning material.
+
+## Sending
+
+All paste actions open the chat, fill the message box, and stop. They never press Send.
+
+- **Paste comments** — pastes each selected student's `Feedback`.
+- **Paste quiz feedback** — pastes `Quiz1`/`Quiz2 Feedback` for the selected quiz.
+- **Paste announcement** — pastes one shared message, plus any files ticked under
+  **Attachments**, into each selected student's chat. Attachment runs handle one student
+  at a time, since the file preview stays open for review.
+
+Which app a student routes to comes from `Preferred Channel`, or from `Parent Language`
+when that is blank (Chinese → WeCom, otherwise WhatsApp).
+
+`Send Status`, `Send Error`, and `Last Attempt` are written back per row. Status values
+are `pasted`, `needs_review`, `skipped_absent`, and `failed`.
+
+### Check group chat status
+
+**Check group chats** (on the 批量 Bulk tab) searches for each student's chat by `uid`
+and writes `TRUE`/`FALSE` into the `Group Chat` column. It never opens or pastes into a chat.
+Rows that could not be checked are reported as `needs_review` and left unchanged rather
+than guessed.
+
+For a student with neither `Preferred Channel` nor `Parent Language` set — the usual case
+right after an import — it tries WeCom first, then WhatsApp, and fills in
+`Parent Language` from whichever one found the chat, so later actions route correctly
+without anyone setting it by hand. If neither finds a match, the language is left blank.
+
+The **Bulk actions 跨班级** panel in the right-hand rail runs across whole class
+rosters instead of selected rows — every student of every ticked class in the current
+semester. Untick any class you want to skip; unticked classes are remembered as you move
+between tabs. Three actions share the class list:
+
+- **Generate comments** — regenerates the `Feedback` column for everyone, each class
+  opening with its own lesson recap. Overwrites what was there.
+- **Check group chats** — the check above, semester-wide.
+- **Paste comments** — the supervised paste, one student at a time, never pressing Send.
+
+The two desktop actions take care of WeCom themselves: its window is brought up (or
+restored from the Dock) before the batch starts, and minimized again when the batch
+finishes, so WeCom can just sit in the background between runs. WhatsApp is still
+checked up front and must already be open — the batch stops immediately with a clear
+message if a needed app is unavailable, and never opens anything mid-batch. Waits are adaptive: fast machines move on as soon as WeCom's UI confirms each step,
+slow machines get longer caps than the old fixed delays — budget two to four seconds
+per student depending on the machine. Long runs show a live progress bar with an
+estimated time remaining and a **Cancel** button — cancelling stops after the row in
+flight, keeps everything already written, and still tucks WeCom away. The automation
+itself must stay in the foreground while it runs: it works by sending real keystrokes,
+and macOS delivers those only to the frontmost window, so true background operation is
+not possible with this approach.
+
+## Managing the roster
+
+### Import a semester's enrollment
+
+The **Import Students** tab reads a platform enrollment export — `.xlsx` (including the
+platform's Strict OOXML variant), `.csv` (UTF-8 or GBK), or `.json` (a bare list of
+records, or wrapped in an API envelope like `{"data": {"list": [...]}}`) — with the
+format detected from the file's content, not its name. Required fields: `classId`,
+`className`, `classTimeDescription`, `firstName`/`lastName`, `学员id`, `payStatus`,
+`是否入班`. The reader is deliberately
+forgiving about the file's shape: columns are matched by name (with common renames and
+case/spacing differences accepted), extra columns and reordering are ignored, the header
+row is located by content even under a banner row, and instruction sheets before the
+data sheet are skipped — so most platform export changes need no app update. Only
+`payStatus = Paid` and `是否入班 = 是` rows are imported. Choose the file, name the semester (or pick an existing
+one), **Preview** to see the classes and counts found, untick anything you don't want,
+then **Commit Import**.
+
+Parent phone, email, and address are deliberately not imported — contact happens through
+chat search by `uid`, so `WhatsApp Phone` is only filled in by hand for families that
+need it.
+
+Re-running the same file is safe: semesters and classes are matched by name / platform
+`classId`, and students already on the roster (matched by `uid`) are left untouched
+rather than duplicated.
+
+**Overwrite existing roster** instead makes a class's roster exactly match the file. A
+student on the roster but missing from the file is **permanently deleted**, so it asks
+for explicit confirmation whenever the preview shows anyone would be removed. Students in
+both keep everything already recorded about them — feedback, quiz scores, teacher notes,
+attendance — and only their name and `Group Chat` are refreshed. A timestamped database
+backup is written automatically before any deletion.
+
+### Delete a student, a class, or a semester
+
+- **A student**: the `×` at the end of their row. Confirms by name.
+- **A class**: **Delete class** in the roster toolbar. Removes its students, columns,
+  attachments, and announcement file, and confirms with the student count first.
+- **A semester**: the **Delete "…"** button beside the semester dropdown. Shows exactly
+  which classes and how many students would go, and makes the same automatic backup.
+
+### Export
+
+Both export buttons download a real `.xlsx`, scoped to the semester selected in the
+top-left dropdown, one class per sheet:
+
+- **Export Excel** → every internal column. The full round-trip copy.
+- **Export Report** → the curated status view: Name, Student ID, 电话号码, 是否有群,
+  是否发开课提醒, 是否发课后反馈, 第一节课反馈, 第一次quiz反馈, 第二次quiz反馈. For
+  reporting, not for re-importing.
+
+Both exports, and **Delete class**, live under the toolbar's **⋯** menu.
+Editing a downloaded file does not change the database. Scripted callers can use
+`POST /api/export` or `POST /api/export/report` with an optional `{"semester": "..."}`
+body, which writes into `exports/` and returns the path instead of streaming a download.
+
+## Building the macOS app
+
+```bash
+./build_mac.sh
 ```
 
-From a text or PowerPoint file without the API:
+That builds `dist/Teacher Feedback Desk.app`, signs every nested binary with the
+"Think Academy Automation" certificate from the login keychain, and wraps it in
+`dist/Teacher Feedback Desk.dmg`. Signing every release with that same certificate is
+what lets macOS keep the Accessibility grant across updates — teachers replace the app
+and their permissions carry over. (The deep re-sign step matters: a cert-signed
+launcher refuses to load the bundled Python.framework while it still carries
+python.org's signature, and the app dies instantly at startup.)
+
+The packaged app keeps its data in `~/Library/Application Support/Teacher Feedback
+Desk/` — database, announcements, exports, and an `app.log` with startup lines and
+crash tracebacks (a windowed app has no console). To seed a fresh install with an
+existing roster, copy the project's `app_data/feedback.db` into that folder's
+`app_data/` before first launch; otherwise the bundled workbook is imported once.
+
+Launch it by double-clicking (or `open`); running the binary inside `Contents/MacOS`
+directly starts the server but never shows the window. On another Mac the ad-hoc
+signature means the first launch needs right-click → Open. The app needs its own
+Accessibility and Automation grants in System Settings — the ones given to the dev
+Python don't carry over — and, as always, quit and reopen the app after granting.
+
+## Platform support
+
+| | Windows | macOS |
+|---|---|---|
+| Roster, feedback generation, quiz banks, import/export | ✅ | ✅ |
+| WeCom paste + group chat check | ✅ `pywinauto` | ✅ Accessibility API |
+| WhatsApp paste + group chat check | ✅ | ❌ returns `needs_review` |
+| Attachment paste | ✅ | ❌ skipped with a notice |
+
+`pywinauto` is Windows-only and is skipped by `requirements.txt` elsewhere. macOS uses
+`wecom_mac.py`, which drives WeCom through `osascript`/JXA instead.
+
+**How each platform verifies it found the right chat** — the two are genuinely different,
+because the two WeCom builds expose very different things:
+
+- **Windows.** WeCom draws its own UI rather than using real controls, so UI Automation
+  exposes no readable text at all, and OCR proved unreliable (WeCom echoes the search term
+  back in an always-present "search online" suggestion, and other sidebar contacts can
+  coincidentally contain a name fragment). What is reliable: a genuine match adds a result
+  row above that suggestion, making the dropdown measurably taller. The check diffs a
+  screenshot from immediately before and after typing the uid and measures the changed
+  region — no text is read. Because that dropdown is a fixed pixel size that does not
+  scale with the window, each run measures its own baseline first (a uid guaranteed not to
+  exist) and compares as a ratio, so it self-calibrates to the machine's window size and
+  display scaling.
+- **macOS.** WeCom for Mac does expose a real accessibility tree, so the check reads the
+  sidebar's own selection state and matches the chat title against the student's uid and
+  name directly.
+
+## Command line
+
+The app covers everything below; these are for scripting and debugging. They act on an
+Excel workbook passed with `--workbook`, **not** on the live database, unless launched
+through the app's own buttons.
+
+Preview feedback without writing anything:
 
 ```powershell
-python class_review_builder.py --source-file ".\lesson_notes.txt" --output class_review.txt
-python class_review_builder.py --source-file ".\lesson_slides.pptx" --output class_review.txt
+python feedback_generator.py --sheet "Geo TTh" --row 2 --class-review "三角形全等的判定"
+python feedback_generator.py --sheet "Geo TTh" --all --start-row 2 --end-row 5 --class-review "..."
+python feedback_generator.py --sheet "Geo TTh" --all --class-review "..." --review-csv preview.csv
 ```
 
-From slides or class material with the OpenAI API:
+Add `--write` to save into the feedback column. Choose the kind with
+`--feedback-type general | quiz | comprehensive`, and for quiz runs pass
+`--quiz-number 1 | 2` so the right quiz is used.
+
+Import enrollment:
 
 ```powershell
-$env:OPENAI_API_KEY="your_api_key_here"
-python class_review_builder.py --source-file ".\lesson_slides.pdf" --output class_review.txt --use-api
-python class_review_builder.py --source-file ".\lesson_slides.pptx" --output class_review.txt --use-api
+python import_enrollment.py --source-file ".\enrollment.xlsx" --semester "2026-27 School Year"
+python import_enrollment.py --source-file ".\enrollment.xlsx" --semester "2026-27 School Year" --commit
+python import_enrollment.py --source-file ".\enrollment.xlsx" --semester "Fall 2026" --class-id 123789 --overwrite --commit --confirm-delete
 ```
 
-The generated `class_review.txt` is copied directly as paragraph 1 of the parent message.
-
-## Preview one entry
+Supervised paste (`--mode paste-only`; the default `dry-run` only prints):
 
 ```powershell
-python feedback_generator.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt
+.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --row 2 --status
+.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --rows 3,5 --mode paste-only
+.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --start-row 2 --end-row 10 --mode paste-only --action check-group-chat
+.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --row 2 --action mass-notification --mass-message-file notice.txt --attachment ".\handout.pdf" --mode paste-only
 ```
 
-The command previews the generated feedback without changing the workbook.
+`--action comment` (default) pastes each row's feedback; `--action mass-notification`
+pastes one shared message everywhere; `--action check-group-chat` only checks. Add
+`--channel wecom|whatsapp` to force which app a check searches, `--check-apps` to print
+app availability as JSON and exit, or `--require-verification` to stop rather than paste
+when the chat cannot be confirmed.
 
-## Preview several or all entries
+On Windows, `--wecom-exe` or the `WECOM_EXE` variable points at a non-standard WeCom
+install, and `--debug-search-results` prints the candidates the search sees.
 
-Preview rows 2 through 5:
+### Common options
 
-```powershell
-python feedback_generator.py --sheet "Geo TTh" --all --start-row 2 --end-row 5 --class-review-file class_review.txt
-```
+- `--workbook` — path to the Excel file.
+- `--sheet` — sheet name.
+- `--row` / `--rows` / `--start-row` / `--end-row` / `--all` — which students.
+- `--class-review` / `--class-review-file` — the opening paragraph.
+- `--feedback-type` — `comprehensive` (default), `general`, or `quiz`.
+- `--quiz-number` — `1` or `2`. Without it the quiz is inferred from each row's data.
+- `--write` — save back to the workbook.
 
-Save that preview to a spreadsheet-friendly CSV for review:
+## Project files
 
-```powershell
-python feedback_generator.py --sheet "Geo TTh" --all --start-row 2 --end-row 5 --class-review-file class_review.txt --review-csv review_preview.csv
-```
+**App**
+- `frontend_server.py` — the local server and action runner.
+- `frontend/` — the browser interface.
+- `database_store.py` — SQLite roster, recaps, one-time Excel import, exports, backups.
+- `attachment_store.py` — per-class attachment storage.
+- `quiz_bank_store.py` — editable quiz banks.
+- `import_enrollment.py` — enrollment import, also usable from the command line.
 
-Preview every student row in the sheet:
+**Feedback wording**
+- `feedback_master.py` — assembles a message from the pieces below.
+- `feedback_common.py` — shared student-row, wording, and formatting helpers.
+- `feedback_general.py` — regular classroom feedback.
+- `feedback_quiz.py` — quiz score parsing and quiz wording.
+- `feedback_generator.py` — command-line front end for the generators.
+- `geometry_volume1_quiz1_comment_bank.py`, `geometry_volume1_quiz2_comment_bank.py`,
+  `amc10_quiz1_comment_bank.py` — default banks used to seed the database.
 
-```powershell
-python feedback_generator.py --sheet "Geo TTh" --all --class-review-file class_review.txt
-```
+**Paste automation** — one module per app per platform, with `paste_sender.py`
+choosing between them at run time. The Windows modules are imported only on Windows,
+so `pywinauto` is never needed elsewhere.
 
-Choose which kind of feedback to generate:
+- `paste_sender.py` — the supervised paste CLI, job building, and the platform
+  dispatch. Never sends.
+- `paste_common.py` — the job/status types and clipboard helpers every robot shares.
+- `wecom_win.py` / `wecom_mac.py` — WeCom, via UI Automation and the Accessibility
+  API respectively.
+- `whatsapp_win.py` — WhatsApp on Windows.
+- `whatsapp_mac.py` — in-progress WhatsApp support for macOS; not wired up yet.
+- `paste_comment.py`, `paste_mass_notification.py` — which text a row should paste.
+- `paste_attachments.py` — Windows file-clipboard staging.
 
-```powershell
-python feedback_generator.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --feedback-type general
-python feedback_generator.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --feedback-type quiz
-python feedback_generator.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --feedback-type comprehensive
-```
-
-`general` writes the course description plus regular classroom feedback. `quiz` writes the course description plus quiz-focused feedback. `comprehensive` writes the course description plus both quiz and regular feedback. Writing with `--write` updates the existing `Feedback` cells in the same workbook; it does not create a copy of the sheet.
-
-## Write one entry back to Excel
-
-```powershell
-python feedback_generator.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --write
-```
-
-This writes the generated text into the `Feedback` column for that row.
-
-## Write all entries back to Excel
-
-```powershell
-python feedback_generator.py --sheet "Geo TTh" --all --class-review-file class_review.txt --write
-```
-
-Test a smaller range before writing everyone:
-
-```powershell
-python feedback_generator.py --sheet "Geo TTh" --all --start-row 2 --end-row 5 --class-review-file class_review.txt --write
-```
-
-## API-assisted student comments
-
-Revise the Chinese teacher note in `Remark for Student`, preview the parent comment, and leave the sheet unchanged:
-
-```powershell
-python feedback_generator.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --revise-remark --use-api
-```
-
-Revise the Chinese teacher note, save it back to `Remark for Student`, generate the parent comment, and write it to `Feedback`:
-
-```powershell
-python feedback_generator.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --revise-remark --write-revised-remark --use-api --write
-```
-
-## Supervised paste helper
-
-Check one row and the needed desktop app without pasting:
-
-```powershell
-.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --status
-```
-
-Open the needed app if the script can find it:
-
-```powershell
-.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --open-app
-```
-
-Search WeCom by UID, press Enter to open the first relevant result, focus the message box, and paste without sending:
-
-```powershell
-.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --mode paste-only
-```
-
-Paste a mixed batch without sending. Rows route to WeCom or WhatsApp from the workbook; missing contacts are marked `needs_review` and the batch continues:
-
-```powershell
-.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --start-row 2 --end-row 8 --class-review-file class_review.txt --mode paste-only
-```
-
-Paste one shared mass notification to each selected chat without sending:
-
-```powershell
-.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --start-row 2 --end-row 8 --action mass-notification --mass-message-file notice.txt --mode paste-only
-```
-
-`--action comment` is the default and pastes each row's `Feedback` value. `--action mass-notification` pastes the same shared text for every selected row. Shared text can come from `--mass-message`, `--mass-message-file`, or, if neither is provided, `--class-review-file`.
-
-The paste helper recognizes window titles containing `WeCom`, `企业微信`, or `WXWork` by default. It does not press Enter after pasting, and it does not use calculated screen-position clicks. If WeCom / 企业微信 is installed in a custom location, pass `--wecom-exe "C:\path\to\WXWork.exe"` or set `WECOM_EXE`. If Enter cannot open the result on a computer, try `--ui-control-result-open` or `--manual-result-click`. Add `--require-verification` if you want the script to stop whenever it cannot verify the chat by UI text.
-
-Paste multiple specific rows automatically without sending:
-
-```powershell
-.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --rows 3,5 --class-review-file class_review.txt --mode paste-only
-```
-
-You can also use a row range:
-
-```powershell
-.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --start-row 3 --end-row 5 --class-review-file class_review.txt --mode paste-only
-```
-
-The sender writes `Send Status`, `Send Error`, and `Last Attempt` unless `--no-status-write` is passed. Status values include `pasted`, `needs_review`, `skipped_absent`, and `failed`.
-
-For WhatsApp group search, WhatsApp Desktop or an active WhatsApp Web browser tab can be used. If WhatsApp is in a browser tab, make that tab active before running paste-only, or run `--open-app` to open `https://web.whatsapp.com/`.
-
-To inspect which safe WeCom search candidates the script sees:
-
-```powershell
-python paste_sender.py --sheet "Geo TTh" --row 2 --class-review-file class_review.txt --debug-search-results
-```
-
-## Options
-
-- `--workbook`: Path to the Excel file. Defaults to `./Geo_TTh_Student_Script_fixed_rows_only.xlsx`.
-- `--sheet`: Sheet name. Defaults to `Geo TTh`.
-- `--row`: Excel row number. Row `2` is the first student row.
-- `--all`: Generate feedback for every student row in the sheet.
-- `--start-row`: First row for `--all`. Defaults to `2`.
-- `--end-row`: Last row for `--all`. Omit to continue through the sheet.
-- `--review-csv`: Save generated preview rows to a UTF-8 CSV with row, UID, student, status, revised remark, and feedback columns.
-- `--class-review`: What the class covered today. This becomes the first paragraph.
-- `--class-review-file`: Optional text file containing the class review.
-- `--feedback-type`: `comprehensive`, `general`, or `quiz`. Defaults to `comprehensive`.
-- `--use-api`: Use OpenAI to polish the student-specific parent comment.
-- `--revise-remark`: Use OpenAI to revise `Remark for Student` first.
-- `--write-revised-remark`: Save the revised remark back to the sheet.
-- `--model`: OpenAI model name. Defaults to `gpt-5.5`.
-- `--write`: Save the generated text back to the workbook.
-
-Absent students are skipped and no feedback comment is generated for them.
-Fields marked `Not Observed` are left out of the message.
-`Additional Comment` is appended to the end of paragraph 2.
+**Other**
+- `setup.ps1`, `setup.sh` — first-time environment setup.
+- `roster_template.xlsx` — the blank workbook a fresh install seeds from; real
+  rosters only enter through the import flow.

@@ -7,7 +7,6 @@ import sys
 
 from openpyxl import load_workbook
 
-from openai_api import DEFAULT_OPENAI_MODEL
 from feedback_common import (
     DEFAULT_SHEET,
     DEFAULT_WORKBOOK,
@@ -16,12 +15,8 @@ from feedback_common import (
     find_column,
     iter_student_rows,
     normalize_uid,
-    revise_remark_with_gpt,
     set_column_value,
     student_from_worksheet,
-    write_column_value,
-    write_feedback,
-    load_student_row,
 )
 from feedback_master import FeedbackGenerator, generate_feedback
 from feedback_quiz import format_score, score_and_denominator_from_text
@@ -54,7 +49,6 @@ def export_review_csv(rows: list[dict[str, str]], output_path: Path) -> None:
         "status",
         "feedback_column",
         "feedback_type",
-        "revised_remark",
         "feedback",
     ]
     with output_path.open("w", newline="", encoding="utf-8-sig") as csv_file:
@@ -226,25 +220,24 @@ def build_parser(*, default_feedback_type: str = "comprehensive") -> argparse.Ar
         help="Optional Chinese class review file for Chinese parent messages.",
     )
     parser.add_argument(
+        "--ai-polish",
+        action="store_true",
+        help="Write Chinese personal paragraphs with the local AI (template on any failure).",
+    )
+    parser.add_argument(
+        "--closing-note",
+        default="",
+        help="Hand-written paragraph 3. Empty keeps the default homework note + closing.",
+    )
+    parser.add_argument(
+        "--quiz-number",
+        choices=("1", "2"),
+        help="Which quiz this run is about. Without it, the quiz is inferred from each row.",
+    )
+    parser.add_argument(
         "--class-review-file-en",
         type=Path,
         help="Optional English class review file for English parent messages.",
-    )
-    parser.add_argument(
-        "--use-api",
-        action="store_true",
-        help="Use the OpenAI API to polish the parent-facing personal comment.",
-    )
-    parser.add_argument("--model", default=DEFAULT_OPENAI_MODEL)
-    parser.add_argument(
-        "--revise-remark",
-        action="store_true",
-        help="Use the OpenAI API to revise the Remark for Student cell text first.",
-    )
-    parser.add_argument(
-        "--write-revised-remark",
-        action="store_true",
-        help="Save the revised Remark for Student text back to the workbook.",
     )
     return parser
 
@@ -345,25 +338,9 @@ def main(*, default_feedback_type: str = "comprehensive") -> None:
     generated = 0
     skipped = 0
     review_rows: list[dict[str, str]] = []
-    for student in students:
-        revised_remark = ""
-        if args.revise_remark:
-            revised_remark = revise_remark_with_gpt(student, args.model)
-            if revised_remark:
-                student.values["Remark for Student"] = revised_remark
-                print("=" * 72)
-                print(f"Row {student.excel_row} revised remark:")
-                print(revised_remark)
-                print()
-                if args.write_revised_remark:
-                    set_column_value(
-                        worksheet,
-                        headers,
-                        student.excel_row,
-                        "Remark for Student",
-                        revised_remark,
-                    )
-
+    total_rows = len(students)
+    for row_index, student in enumerate(students, start=1):
+        print(f"Batch item {row_index}/{total_rows}", flush=True)
         student_class_review = (
             class_review_zh if student.language.lower().startswith("chinese") else class_review_en
         )
@@ -371,9 +348,10 @@ def main(*, default_feedback_type: str = "comprehensive") -> None:
         feedback = generate_feedback(
             student,
             class_review=student_class_review,
-            use_api=args.use_api,
-            model=args.model,
             feedback_type=args.feedback_type,
+            quiz_number=args.quiz_number,
+            closing_note=args.closing_note,
+            ai_polish=args.ai_polish,
         )
         print_student_result(student, feedback)
 
@@ -385,7 +363,6 @@ def main(*, default_feedback_type: str = "comprehensive") -> None:
                 "status": "skipped_absent" if feedback is None else "generated",
                 "feedback_column": args.feedback_column,
                 "feedback_type": args.feedback_type,
-                "revised_remark": revised_remark,
                 "feedback": feedback or "",
             }
         )
@@ -398,7 +375,7 @@ def main(*, default_feedback_type: str = "comprehensive") -> None:
         if args.write:
             set_column_value(worksheet, headers, student.excel_row, args.feedback_column, feedback)
 
-    if args.write or args.write_revised_remark:
+    if args.write:
         workbook.save(args.workbook)
         print(f"Saved workbook: {args.workbook}")
 

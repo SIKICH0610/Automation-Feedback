@@ -9,7 +9,7 @@ from openpyxl.styles import PatternFill
 
 from database_store import StoreError
 from feedback_generator import parse_row_numbers
-from frontend_server import ActionRunner, WorkbookStore, announcement_filename
+from frontend_server import ActionRunner, WorkbookStore, announcement_filename, run_worker, worker_command
 
 
 HEADERS = [
@@ -227,6 +227,49 @@ class FrontendStoreTest(unittest.TestCase):
         )
         self.assertIn("paste_sender.py", " ".join(paste_command))
         self.assertIn("paste-only", paste_command)
+
+    def test_worker_command_switches_shape_when_frozen(self) -> None:
+        import sys
+
+        command = worker_command("paste_sender")
+        self.assertEqual(command[0], sys.executable)
+        self.assertTrue(command[1].endswith("paste_sender.py"))
+
+        # PyInstaller sets sys.frozen; there is no interpreter or .py file then, so
+        # the command must relaunch the app itself in worker mode instead.
+        sys.frozen = True
+        try:
+            self.assertEqual(
+                worker_command("feedback_generator"),
+                [sys.executable, "--worker", "feedback_generator"],
+            )
+        finally:
+            del sys.frozen
+
+        with self.assertRaises(ValueError):
+            worker_command("os")
+
+    def test_run_worker_dispatches_with_the_workers_own_argv(self) -> None:
+        import sys
+        from unittest.mock import patch
+
+        seen: dict[str, list[str]] = {}
+
+        def fake_main() -> None:
+            seen["argv"] = list(sys.argv)
+
+        original_argv = list(sys.argv)
+        try:
+            with patch("paste_sender.main", fake_main):
+                run_worker(["paste_sender", "--check-apps"])
+        finally:
+            sys.argv = original_argv
+        self.assertEqual(seen["argv"], ["paste_sender", "--check-apps"])
+
+        with self.assertRaises(SystemExit):
+            run_worker(["subprocess"])
+        with self.assertRaises(SystemExit):
+            run_worker([])
 
     def test_row_parser_and_safe_announcement_name(self) -> None:
         self.assertEqual(parse_row_numbers("2,5,7-9,5"), [2, 5, 7, 8, 9])

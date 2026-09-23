@@ -2,43 +2,33 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from openai_api import DEFAULT_OPENAI_MODEL
 from feedback_common import (
     FEEDBACK_TYPE_CHOICES,
     OBSERVATION_FIELDS,
     StudentRow,
-    append_parent_closing,
+    closing_sentence,
+    homework_note,
     class_review_paragraph,
     clean_parent_feedback_text,
     homework_paragraph,
-    personal_feedback_with_gpt,
     phrase_for,
 )
 from feedback_general import general_comment_paragraph
 from feedback_quiz import quiz_comment_paragraph
 
-def comprehensive_comment_paragraph(student: StudentRow, observations: list[str], is_chinese: bool) -> str:
-    quiz_comment = quiz_comment_paragraph(
-        student,
-        observations,
-        is_chinese,
-        include_observations=False,
-    )
-    general_comment = general_comment_paragraph(
-        student,
-        observations,
-        is_chinese,
-        include_quiz_remark=False,
-    )
-    if quiz_comment and general_comment:
-        return "\n\n".join([quiz_comment, general_comment])
-    return quiz_comment or general_comment
-
 @dataclass
 class FeedbackGenerator:
     class_review: str = ""
-    use_api: bool = False
-    model: str = DEFAULT_OPENAI_MODEL
+    # Optional hand-written paragraph 3; empty keeps the default homework note +
+    # closing sentence. Quiz-only messages ignore it.
+    closing_note: str = ""
+    # When True, the personal paragraph of Chinese general comments is written by
+    # the local AI from the row's raw material (remark + observations + additional
+    # comment), in the teacher's own voice; any failure falls back to the template.
+    ai_polish: bool = False
+    # "1" / "2" when the teacher picked a quiz in the UI; None lets the row's own
+    # data decide, which is all the CLI and comprehensive feedback can do.
+    quiz_number: str | None = None
 
     def is_chinese(self, student: StudentRow) -> bool:
         return student.language.lower().startswith("chinese")
@@ -50,15 +40,49 @@ class FeedbackGenerator:
             if (phrase := phrase_for(field, student.values.get(field), student.language))
         ]
 
-    def class_paragraph(self, student: StudentRow) -> str:
-        return class_review_paragraph(self.class_review, self.is_chinese(student))
+    def class_paragraph(self, student: StudentRow, feedback_type: str = "comprehensive") -> str:
+        kind = "quiz" if feedback_type == "quiz" else "lesson"
+        return class_review_paragraph(self.class_review, self.is_chinese(student), kind=kind)
 
     def general_personal_paragraph(self, student: StudentRow) -> str:
+        ai_text = self._ai_personal_paragraph(student)
+        if ai_text:
+            return ai_text
         return general_comment_paragraph(
             student,
             self.observations_for_student(student),
             self.is_chinese(student),
         )
+
+    def _ai_personal_paragraph(self, student: StudentRow) -> str | None:
+        """AI-written personal paragraph, or None to use the template.
+
+        Chinese rows only for now, and only when there is real material to work
+        from -- an empty row would just invite invention. Every failure path is a
+        silent fallback: generation must never break because a model hiccuped.
+        """
+        if not self.ai_polish or not self.is_chinese(student):
+            return None
+        remark = str(student.values.get("Remark for Student") or "").strip()
+        additional = str(student.values.get("Additional Comment") or "").strip()
+        observations = self.observations_for_student(student)
+        parts = [part for part in (remark, "，".join(observations), additional) if part]
+        if not parts:
+            return None
+        material = "；".join(parts)
+        try:
+            from ai_polish import attach_name, expand
+
+            result = expand("student", material, None)
+        except Exception:
+            return None
+        if not result.get("ok"):
+            print(f"AI polish fell back to template: {result.get('error', 'unknown')}")
+            return None
+        name = student.first_name or student.full_name
+        # The draft opens with 孩子/学生 by design; gluing the real name in
+        # front of that read "Sunnie 孩子上课很认真" -- merge instead.
+        return attach_name(name, result["text"])
 
     def quiz_personal_paragraph(self, student: StudentRow) -> str:
         quiz_comment = quiz_comment_paragraph(
@@ -66,6 +90,7 @@ class FeedbackGenerator:
             self.observations_for_student(student),
             self.is_chinese(student),
             include_observations=False,
+            quiz_number=self.quiz_number,
         )
         if quiz_comment:
             return quiz_comment
@@ -108,39 +133,47 @@ class FeedbackGenerator:
             )
 
         is_chinese = self.is_chinese(student)
-        class_paragraph = self.class_paragraph(student)
+        class_paragraph = self.class_paragraph(student, feedback_type)
         homework = homework_paragraph(student, is_chinese)
         personal_paragraphs = self.personal_paragraphs(student, feedback_type)
 
-        if self.use_api:
-            local_comment = "\n\n".join(personal_paragraphs)
-            personal_section = personal_feedback_with_gpt(
-                student,
-                observations=self.observations_for_student(student),
-                local_comment=local_comment,
-                homework=homework,
-                model=self.model,
-                feedback_type=feedback_type,
-            )
-            feedback = clean_parent_feedback_text("\n\n".join([class_paragraph, personal_section.strip()]))
-            return append_parent_closing(feedback, is_chinese)
+        # The standing homework note goes with the class-performance comment only. A
+        # quiz-only message is about that quiz, and a parent who also gets the general
+        # comment would otherwise read the same instructions twice.
+        wants_homework_note = feedback_type in {"general", "comprehensive"}
 
-        paragraphs = [class_paragraph, *personal_paragraphs]
-        if homework:
-            paragraphs.append(homework)
-        feedback = clean_parent_feedback_text("\n\n".join(paragraphs))
-        return append_parent_closing(feedback, is_chinese)
+        # Always exactly three paragraphs: greeting / the student's classroom
+        # performance, nothing else / homework note + homework reflection + closing.
+        joiner = "" if is_chinese else " "
+        middle = joiner.join(part.strip() for part in personal_paragraphs if part and part.strip())
+        custom_tail = self.closing_note.strip() if wants_homework_note else ""
+        if custom_tail:
+            # The teacher wrote paragraph 3 themselves; it replaces the standing
+            # homework note and closing line. A per-student Homework Reflection is
+            # that student's own data, so it still rides along.
+            tail_parts = [custom_tail, homework or ""]
+        else:
+            tail_parts = [
+                homework_note(is_chinese) if wants_homework_note else "",
+                homework or "",
+                closing_sentence(is_chinese),
+            ]
+        tail = joiner.join(part.strip() for part in tail_parts if part and part.strip())
+        paragraphs = [class_paragraph, middle, tail] if middle else [class_paragraph, tail]
+        return clean_parent_feedback_text("\n\n".join(paragraphs))
 
 def generate_feedback(
     student: StudentRow,
     class_review: str = "",
     *,
-    use_api: bool = False,
-    model: str = DEFAULT_OPENAI_MODEL,
     feedback_type: str = "comprehensive",
+    quiz_number: str | None = None,
+    closing_note: str = "",
+    ai_polish: bool = False,
 ) -> str | None:
     return FeedbackGenerator(
         class_review=class_review,
-        use_api=use_api,
-        model=model,
+        quiz_number=quiz_number,
+        closing_note=closing_note,
+        ai_polish=ai_polish,
     ).generate(student, feedback_type=feedback_type)
