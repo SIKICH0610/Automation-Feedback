@@ -19,8 +19,6 @@ const state = {
   recaps: { general: "", "1": "", "2": "" },
   quizRecapDirty: false,
   closingDirty: false,
-  attachments: [],
-  selectedAttachments: new Set(),
   bulkUnchecked: new Set(),
   checkChannel: "auto",
   busy: false,
@@ -142,129 +140,6 @@ function setLog(text) {
   elements.logLast.textContent = last.length > 46 ? `${last.slice(0, 46)}…` : last;
 }
 
-function formatFileSize(bytes) {
-  const size = Number(bytes) || 0;
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function selectedAttachmentIds() {
-  return state.attachments
-    .filter((attachment) => state.selectedAttachments.has(attachment.id))
-    .map((attachment) => attachment.id);
-}
-
-function renderAttachments() {
-  elements.attachmentList.replaceChildren();
-  const availableIds = new Set(state.attachments.map((attachment) => attachment.id));
-  state.selectedAttachments = new Set(
-    Array.from(state.selectedAttachments).filter((id) => availableIds.has(id))
-  );
-
-  state.attachments.forEach((attachment) => {
-    const row = document.createElement("div");
-    row.className = "attachment-row";
-
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.className = "attachment-select";
-    checkbox.checked = state.selectedAttachments.has(attachment.id);
-    checkbox.setAttribute("aria-label", `Include ${attachment.name}`);
-    checkbox.addEventListener("change", () => {
-      if (checkbox.checked) state.selectedAttachments.add(attachment.id);
-      else state.selectedAttachments.delete(attachment.id);
-      renderAttachments();
-    });
-
-    const file = document.createElement("div");
-    file.className = "attachment-file";
-    const link = document.createElement("a");
-    link.className = "attachment-name";
-    link.href = `/api/attachment?id=${encodeURIComponent(attachment.id)}`;
-    link.target = "_blank";
-    link.rel = "noopener";
-    link.textContent = attachment.name;
-    link.title = attachment.name;
-    const meta = document.createElement("span");
-    meta.className = "attachment-meta";
-    meta.textContent = `${attachment.kind} | ${formatFileSize(attachment.size)}`;
-    file.append(link, meta);
-
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "attachment-remove";
-    remove.textContent = "Remove";
-    remove.setAttribute("aria-label", `Remove ${attachment.name}`);
-    remove.addEventListener("click", () => deleteAttachment(attachment));
-
-    row.append(checkbox, file, remove);
-    elements.attachmentList.appendChild(row);
-  });
-
-  const selected = selectedAttachmentIds().length;
-  const total = state.attachments.length;
-  elements.attachmentSummary.textContent = total
-    ? `${selected} of ${total} selected`
-    : "0 files";
-  elements.attachmentEmpty.hidden = total > 0;
-}
-
-async function uploadAttachments(files) {
-  const selectedFiles = Array.from(files || []);
-  if (!selectedFiles.length) return;
-  try {
-    setBusy(true, "Uploading attachments", `${selectedFiles.length} file(s) for ${state.sheetName}`);
-    for (const file of selectedFiles) {
-      const query = new URLSearchParams({ sheet: state.sheetName, name: file.name });
-      const response = await fetch(`/api/attachment/upload?${query}`, {
-        method: "POST",
-        headers: { "Content-Type": file.type || "application/octet-stream" },
-        body: file,
-      });
-      let payload;
-      try {
-        payload = await response.json();
-      } catch {
-        payload = { ok: false, error: `The server returned HTTP ${response.status}.` };
-      }
-      if (!response.ok || payload.ok === false) {
-        throw new Error(payload.error || `Could not upload ${file.name}.`);
-      }
-      state.attachments = payload.attachments || [];
-      state.selectedAttachments.add(payload.attachment.id);
-      renderAttachments();
-    }
-    toast(`${selectedFiles.length} attachment${selectedFiles.length === 1 ? "" : "s"} uploaded.`);
-  } catch (error) {
-    toast(error.message, true);
-  } finally {
-    elements.attachmentInput.value = "";
-    setBusy(false);
-  }
-}
-
-async function deleteAttachment(attachment) {
-  if (!window.confirm(`Remove ${attachment.name} from this class?`)) return;
-  try {
-    setBusy(true, "Removing attachment", attachment.name);
-    const payload = await api("/api/attachment/delete", {
-      method: "POST",
-      body: JSON.stringify({
-        sheet: state.sheetName,
-        attachment_id: attachment.id,
-      }),
-    });
-    state.attachments = payload.attachments || [];
-    state.selectedAttachments.delete(attachment.id);
-    renderAttachments();
-    toast("Attachment removed.");
-  } catch (error) {
-    toast(error.message, true);
-  } finally {
-    setBusy(false);
-  }
-}
 async function deleteStudent(row) {
   const name =
     `${displayValue(row.values["First Name"])} ${displayValue(row.values["Last Name"])}`.trim() ||
@@ -304,7 +179,7 @@ async function deleteClass() {
   const studentCount = state.rows.length;
   const confirmed = window.confirm(
     `Delete "${sheetName}" and all ${studentCount} student${studentCount === 1 ? "" : "s"} in it, ` +
-      "including its announcement and attachments? This cannot be undone."
+      "including its announcement? This cannot be undone."
   );
   if (!confirmed) return;
 
@@ -1176,8 +1051,6 @@ function applySheetData(data, preserve = null) {
   elements.closingText.value = data.closing_note || "";
   state.closingDirty = false;
   renderMode();
-  state.attachments = data.attachments || [];
-  state.selectedAttachments = new Set(state.attachments.map((attachment) => attachment.id));
   state.dirty = false;
   state.announcementDirty = false;
   setSaveState("Saved", "saved");
@@ -1271,7 +1144,6 @@ async function saveQuizRecap({ quiet = false } = {}) {
 async function saveSheet({ quiet = false } = {}) {
   if (!state.dirty && quiet) return;
   const preserve = preservedSelection();
-  const preservedAttachments = new Set(state.selectedAttachments);
   const payload = await api("/api/sheet/save", {
     method: "POST",
     body: JSON.stringify({
@@ -1286,12 +1158,6 @@ async function saveSheet({ quiet = false } = {}) {
   const announcement = elements.announcementText.value;
   const announcementPath = elements.announcementPath.textContent;
   applySheetData(payload.data, preserve);
-  state.selectedAttachments = new Set(
-    state.attachments
-      .filter((attachment) => preservedAttachments.has(attachment.id))
-      .map((attachment) => attachment.id)
-  );
-  renderAttachments();
   elements.announcementText.value = announcement;
   elements.announcementPath.textContent = announcementPath;
   state.announcementDirty = false;
@@ -1409,17 +1275,9 @@ async function runAction(action) {
   const isGroupChatCheck = action === "check-group-chat";
   const usesDesktopApp = isPaste || isGroupChatCheck;
   const selectedCount = state.rows.filter((row) => state.selected.has(rowKey(row))).length;
-  const attachmentIds = action === "paste-announcement" ? selectedAttachmentIds() : [];
-  if (isPaste && attachmentIds.length && selectedCount !== 1) {
-    toast("Select exactly one student when staging attachments for review.", true);
-    return;
-  }
   if (isPaste) {
-    const fileDetail = attachmentIds.length
-      ? ` and ${attachmentIds.length} selected file${attachmentIds.length === 1 ? "" : "s"}`
-      : "";
     const confirmed = window.confirm(
-      `Paste text${fileDetail} for ${selectedCount} selected student${selectedCount === 1 ? "" : "s"}?\n\nThe robot will switch between apps and prepare the message. It will not press Send.`
+      `Paste text for ${selectedCount} selected student${selectedCount === 1 ? "" : "s"}?\n\nThe robot will switch between apps and prepare the message. It will not press Send.`
     );
     if (!confirmed) return;
   }
@@ -1434,8 +1292,8 @@ async function runAction(action) {
     await saveAll({ quiet: true });
     const rows = selectedActionRows();
     if (!rows.length) throw new Error("Select at least one saved student row.");
-    if (action === "paste-announcement" && !elements.announcementText.value.trim() && !attachmentIds.length) {
-      throw new Error("Add announcement text, select at least one attachment, or both.");
+    if (action === "paste-announcement" && !elements.announcementText.value.trim()) {
+      throw new Error("Add announcement text first.");
     }
 
     setLog(`Running ${action} for rows ${rows.join(", ")}...`);
@@ -1444,7 +1302,6 @@ async function runAction(action) {
       sheet: state.sheetName,
       rows,
       quiz_number: modeQuizNumber(),
-      attachment_ids: attachmentIds,
       channel: state.checkChannel,
     });
     setLog(result.output || result.label);
@@ -1574,8 +1431,6 @@ function bindEvents() {
   elements.closingText.addEventListener("input", () => markDirty("closing"));
   bindAiButton(elements.aiRecap, elements.recapText, "recap", "recap");
   bindAiButton(elements.aiAnnounce, elements.announcementText, "announce", "announcement");
-  elements.addAttachment.addEventListener("click", () => elements.attachmentInput.click());
-  elements.attachmentInput.addEventListener("change", () => uploadAttachments(elements.attachmentInput.files));
   document.querySelectorAll(".mode-switch .segment").forEach((button) => {
     button.addEventListener("click", () => switchContentMode(button.dataset.mode));
   });
@@ -1661,11 +1516,6 @@ async function initialize() {
     "announcementPath",
     "saveRecap",
     "recapText",
-    "addAttachment",
-    "attachmentInput",
-    "attachmentSummary",
-    "attachmentList",
-    "attachmentEmpty",
     "recapTitle",
     "closingBlock",
     "closingText",

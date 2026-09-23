@@ -9,8 +9,8 @@ the message box, then stops — a person reads it and presses Send.
 
 ## How the data is stored
 
-`app_data/feedback.db` (SQLite) is the source of truth for classes, students, quiz
-banks, and attachments. On the very first launch, an Excel workbook is imported once to
+`app_data/feedback.db` (SQLite) is the source of truth for classes, students, and
+quiz banks. On the very first launch, an Excel workbook is imported once to
 create that database; after that the app never reads it again, and editing that
 spreadsheet does not change anything.
 
@@ -19,12 +19,6 @@ Back up the live system by copying `app_data/feedback.db` while the server is st
 committed by accident.
 
 ## Setup
-
-First-time setup on Windows:
-
-```powershell
-.\setup.ps1
-```
 
 First-time setup on macOS:
 
@@ -70,7 +64,7 @@ It opens `http://127.0.0.1:8765` in the browser. Keep the terminal open while us
 ### Lesson recap → the opening paragraph
 
 The right-hand rail has three tabs — **反馈 Feedback** (the daily workflow), **通知
-Announce** (announcement + attachments), and **批量 Bulk** (whole-semester runs). The
+Announce** (announcements), and **批量 Bulk** (whole-semester runs). The
 Feedback tab is driven by one content-mode switch: **课堂反馈 | Quiz 1 | Quiz 2**. A
 single recap box, one Generate button, and one Paste button all follow the mode, and
 the roster's column view switches with it, so what Generate writes is what you see.
@@ -237,7 +231,7 @@ backup is written automatically before any deletion.
 
 - **A student**: the `×` at the end of their row. Confirms by name.
 - **A class**: **Delete class** in the roster toolbar. Removes its students, columns,
-  attachments, and announcement file, and confirms with the student count first.
+  and announcement file, and confirms with the student count first.
 - **A semester**: the **Delete "…"** button beside the semester dropdown. Shows exactly
   which classes and how many students would go, and makes the same automatic backup.
 
@@ -284,29 +278,13 @@ Python don't carry over — and, as always, quit and reopen the app after granti
 
 ## Platform support
 
-| | Windows | macOS |
-|---|---|---|
-| Roster, feedback generation, quiz banks, import/export | ✅ | ✅ |
-| WeCom paste + group chat check | ✅ `pywinauto` | ✅ Accessibility API |
-| WhatsApp paste + group chat check | ✅ | ❌ returns `needs_review` |
-| Attachment paste | ✅ | ❌ skipped with a notice |
+macOS only. The Windows lane (pywinauto robots, attachment staging) was removed in
+the 2026-09 cleanup and lives in git history if it is ever needed again. WeCom is
+driven through `osascript`/JXA (`wecom_mac.py`); WhatsApp rows currently return
+`needs_review` while `whatsapp_mac.py` is finished.
 
-`pywinauto` is Windows-only and is skipped by `requirements.txt` elsewhere. macOS uses
-`wecom_mac.py`, which drives WeCom through `osascript`/JXA instead.
+**How the right chat is verified**:
 
-**How each platform verifies it found the right chat** — the two are genuinely different,
-because the two WeCom builds expose very different things:
-
-- **Windows.** WeCom draws its own UI rather than using real controls, so UI Automation
-  exposes no readable text at all, and OCR proved unreliable (WeCom echoes the search term
-  back in an always-present "search online" suggestion, and other sidebar contacts can
-  coincidentally contain a name fragment). What is reliable: a genuine match adds a result
-  row above that suggestion, making the dropdown measurably taller. The check diffs a
-  screenshot from immediately before and after typing the uid and measures the changed
-  region — no text is read. Because that dropdown is a fixed pixel size that does not
-  scale with the window, each run measures its own baseline first (a uid guaranteed not to
-  exist) and compares as a ratio, so it self-calibrates to the machine's window size and
-  display scaling.
 - **macOS.** WeCom for Mac does expose a real accessibility tree, so the check reads the
   sidebar's own selection state and matches the chat title against the student's uid and
   name directly.
@@ -339,11 +317,11 @@ python import_enrollment.py --source-file ".\enrollment.xlsx" --semester "Fall 2
 
 Supervised paste (`--mode paste-only`; the default `dry-run` only prints):
 
-```powershell
-.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --row 2 --status
-.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --rows 3,5 --mode paste-only
-.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --start-row 2 --end-row 10 --mode paste-only --action check-group-chat
-.\.venv\Scripts\python.exe paste_sender.py --sheet "Geo TTh" --row 2 --action mass-notification --mass-message-file notice.txt --attachment ".\handout.pdf" --mode paste-only
+```bash
+.venv/bin/python paste_sender.py --sheet "Geo TTh" --row 2 --status
+.venv/bin/python paste_sender.py --sheet "Geo TTh" --rows 3,5 --mode paste-only
+.venv/bin/python paste_sender.py --sheet "Geo TTh" --start-row 2 --end-row 10 --mode paste-only --action check-group-chat
+.venv/bin/python paste_sender.py --sheet "Geo TTh" --row 2 --action mass-notification --mass-message-file notice.txt --mode paste-only
 ```
 
 `--action comment` (default) pastes each row's feedback; `--action mass-notification`
@@ -351,9 +329,6 @@ pastes one shared message everywhere; `--action check-group-chat` only checks. A
 `--channel wecom|whatsapp` to force which app a check searches, `--check-apps` to print
 app availability as JSON and exit, or `--require-verification` to stop rather than paste
 when the chat cannot be confirmed.
-
-On Windows, `--wecom-exe` or the `WECOM_EXE` variable points at a non-standard WeCom
-install, and `--debug-search-results` prints the candidates the search sees.
 
 ### Common options
 
@@ -371,7 +346,6 @@ install, and `--debug-search-results` prints the candidates the search sees.
 - `frontend_server.py` — the local server and action runner.
 - `frontend/` — the browser interface.
 - `database_store.py` — SQLite roster, recaps, one-time Excel import, exports, backups.
-- `attachment_store.py` — per-class attachment storage.
 - `quiz_bank_store.py` — editable quiz banks.
 - `import_enrollment.py` — enrollment import, also usable from the command line.
 
@@ -384,21 +358,15 @@ install, and `--debug-search-results` prints the candidates the search sees.
 - `data/quiz_banks/*.csv` — quiz-bank seed data, one CSV per bank; adding a
   course means dropping in another CSV, no code.
 
-**Paste automation** — one module per app per platform, with `paste_sender.py`
-choosing between them at run time. The Windows modules are imported only on Windows,
-so `pywinauto` is never needed elsewhere.
+**Paste automation** — macOS only.
 
-- `paste_sender.py` — the supervised paste CLI, job building, and the platform
-  dispatch. Never sends.
-- `paste_common.py` — the job/status types and clipboard helpers every robot shares.
-- `wecom_win.py` / `wecom_mac.py` — WeCom, via UI Automation and the Accessibility
-  API respectively.
-- `whatsapp_win.py` — WhatsApp on Windows.
+- `paste_sender.py` — the supervised paste CLI and job building. Never sends.
+- `paste_common.py` — the job/status types and clipboard helper the robots share.
+- `wecom_mac.py` — WeCom, via the Accessibility API (osascript/JXA).
 - `whatsapp_mac.py` — in-progress WhatsApp support for macOS; not wired up yet.
 - `paste_comment.py`, `paste_mass_notification.py` — which text a row should paste.
-- `paste_attachments.py` — Windows file-clipboard staging.
 
 **Other**
-- `setup.ps1`, `setup.sh` — first-time environment setup.
+- `setup.sh` — first-time environment setup.
 - `roster_template.xlsx` — the blank workbook a fresh install seeds from; real
   rosters only enter through the import flow.

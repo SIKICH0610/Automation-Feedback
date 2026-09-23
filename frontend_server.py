@@ -22,7 +22,6 @@ import webbrowser
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
-from attachment_store import AttachmentStoreError, MAX_ATTACHMENT_BYTES
 from feedback_common import DEFAULT_WORKBOOK
 from database_store import (
     SQLiteFeedbackStore,
@@ -152,31 +151,12 @@ class ActionRunner:
             parsed.append(row_number)
         return ",".join(str(row) for row in sorted(set(parsed)))
 
-    @staticmethod
-    def _attachment_ids(payload: dict[str, Any]) -> list[str]:
-        raw_ids = payload.get("attachment_ids") or []
-        if not isinstance(raw_ids, list):
-            raise FrontendError("Attachment ids must be provided as a list.")
-        return list(dict.fromkeys(str(value).strip() for value in raw_ids if str(value).strip()))
-
-    def command_for(
-        self,
-        payload: dict[str, Any],
-        *,
-        attachment_paths: list[Path] | None = None,
-    ) -> tuple[list[str], str]:
+    def command_for(self, payload: dict[str, Any]) -> tuple[list[str], str]:
         action = str(payload.get("action") or "").strip()
         sheet_name = str(payload.get("sheet") or "").strip()
         if sheet_name not in self.store.sheet_names():
             raise FrontendError(f"Sheet {sheet_name!r} was not found.")
         row_spec = self._row_spec(payload.get("rows"))
-        attachment_ids = self._attachment_ids(payload)
-        if attachment_ids and not action.startswith("paste-"):
-            raise FrontendError("Attachments can only be used with paste actions.")
-        if attachment_ids and "," in row_spec:
-            raise FrontendError(
-                "Attachments stay open for review, so select one student for each attachment run."
-            )
         announcement_path = self.store.announcement_path(sheet_name)
         # Paragraph 1 of a generated comment comes from the teacher's lesson recap, not
         # from the announcement. The announcement is separately pasted to whole classes,
@@ -188,12 +168,6 @@ class ActionRunner:
             "--closing-note",
             self.store.read_closing_note(sheet_name),
         ]
-        attachment_args = [
-            item
-            for path in (attachment_paths or [])
-            for item in ("--attachment", str(path))
-        ]
-
         common = [
             "--workbook",
             str(self.store.workbook_path),
@@ -228,7 +202,6 @@ class ActionRunner:
                 "--mode",
                 "paste-only",
                 "--fallback-channel",
-                *attachment_args,
             ], "Pasted announcement"
 
         if action == "paste-comments":
@@ -241,7 +214,6 @@ class ActionRunner:
                 "Feedback",
                 "--mode",
                 "paste-only",
-                *attachment_args,
             ], "Pasted comments"
 
         if action == "check-group-chat":
@@ -311,7 +283,6 @@ class ActionRunner:
                 "quiz",
                 "--mode",
                 "paste-only",
-                *attachment_args,
             ], f"Pasted quiz {quiz_number} feedback"
 
         raise FrontendError(f"Unknown action {action!r}.")
@@ -721,41 +692,28 @@ class ActionRunner:
         }:
             return self._run_bulk(payload, environment, job=job)
 
-        attachment_ids = self._attachment_ids(payload)
-        with TemporaryDirectory(
-            prefix="attachment_action_",
-            dir=self.store.app_data_dir,
-        ) as temporary_dir:
-            attachment_paths = self.store.materialize_attachments(
-                str(payload.get("sheet") or "").strip(),
-                attachment_ids,
-                Path(temporary_dir),
-            )
-            with self.store.lock:
-                self.store.prepare_runtime_workbook()
+        with self.store.lock:
+            self.store.prepare_runtime_workbook()
+            try:
+                command, label = self.command_for(payload)
+                if job is not None:
+                    rows = payload.get("rows")
+                    job["total"] = len(rows) if isinstance(rows, list) else 0
+                    job["label"] = label
+
+                    def _on_row(done: int, total: int) -> None:
+                        job["done"] = done
+                        job["total"] = total
+
+                    job["on_row"] = _on_row
                 try:
-                    command, label = self.command_for(
-                        payload,
-                        attachment_paths=attachment_paths,
+                    returncode, output, cancelled = self._run_child(
+                        command, environment, label=label, job=job
                     )
-                    if job is not None:
-                        rows = payload.get("rows")
-                        job["total"] = len(rows) if isinstance(rows, list) else 0
-                        job["label"] = label
-
-                        def _on_row(done: int, total: int) -> None:
-                            job["done"] = done
-                            job["total"] = total
-
-                        job["on_row"] = _on_row
-                    try:
-                        returncode, output, cancelled = self._run_child(
-                            command, environment, label=label, job=job
-                        )
-                    finally:
-                        self.store.sync_runtime_workbook()
                 finally:
-                    self.store.remove_runtime_workbook()
+                    self.store.sync_runtime_workbook()
+            finally:
+                self.store.remove_runtime_workbook()
         if len(output) > 50000:
             output = output[-50000:]
         if job is not None and cancelled:
@@ -816,18 +774,8 @@ class FrontendHandler(BaseHTTPRequestHandler):
         if length <= 0:
             raise FrontendError("The uploaded file is empty.")
         if length > max_bytes:
-            raise FrontendError("Each attachment must be 100 MB or smaller.")
+            raise FrontendError("The uploaded file is too large.")
         return self.rfile.read(length)
-
-    def _send_attachment(self, attachment: dict[str, Any]) -> None:
-        content = attachment["file_data"]
-        self.send_response(200)
-        self.send_header("Content-Type", attachment["content_type"])
-        self.send_header("Content-Length", str(len(content)))
-        self.send_header("Content-Disposition", "inline")
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(content)
 
     def _send_download(self, file_path: Path) -> None:
         content = file_path.read_bytes()
@@ -941,10 +889,6 @@ class FrontendHandler(BaseHTTPRequestHandler):
                     {"ok": True, "bank": self.store.load_quiz_bank(bank_id)},
                 )
                 return
-            if parsed.path == "/api/attachment":
-                attachment_id = parse_qs(parsed.query).get("id", [""])[0]
-                self._send_attachment(self.store.get_attachment(attachment_id))
-                return
             if parsed.path == "/api/export/download":
                 query = parse_qs(parsed.query)
                 export_type = (query.get("type", ["full"])[0] or "full").strip()
@@ -961,7 +905,7 @@ class FrontendHandler(BaseHTTPRequestHandler):
                 self._send_download(export_path)
                 return
             self._serve_static(parsed.path)
-        except (AttachmentStoreError, FrontendError, QuizBankStoreError) as exc:
+        except (FrontendError, QuizBankStoreError) as exc:
             self._send_json(400, {"ok": False, "error": str(exc)})
         except Exception as exc:
             self._send_json(500, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
@@ -969,25 +913,6 @@ class FrontendHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         try:
-            if parsed.path == "/api/attachment/upload":
-                query = parse_qs(parsed.query)
-                sheet_name = query.get("sheet", [""])[0]
-                filename = query.get("name", [""])[0]
-                attachment = self.store.add_attachment(
-                    sheet_name,
-                    filename=filename,
-                    content_type=self.headers.get("Content-Type", ""),
-                    file_data=self._read_binary(MAX_ATTACHMENT_BYTES),
-                )
-                self._send_json(
-                    200,
-                    {
-                        "ok": True,
-                        "attachment": attachment,
-                        "attachments": self.store.list_attachments(sheet_name),
-                    },
-                )
-                return
             if parsed.path in {"/api/import/preview", "/api/import/commit"}:
                 query = parse_qs(parsed.query)
                 semester_name = (query.get("semester", [""])[0] or "").strip()
@@ -1148,20 +1073,6 @@ class FrontendHandler(BaseHTTPRequestHandler):
                     },
                 )
                 return
-            if parsed.path == "/api/attachment/delete":
-                sheet_name = str(payload.get("sheet") or "")
-                self.store.remove_attachment(
-                    sheet_name,
-                    str(payload.get("attachment_id") or ""),
-                )
-                self._send_json(
-                    200,
-                    {
-                        "ok": True,
-                        "attachments": self.store.list_attachments(sheet_name),
-                    },
-                )
-                return
             if parsed.path == "/api/student/delete":
                 data = self.store.delete_student(
                     str(payload.get("sheet") or ""),
@@ -1235,7 +1146,7 @@ class FrontendHandler(BaseHTTPRequestHandler):
                 )
                 return
             self._send_json(404, {"ok": False, "error": "API endpoint not found."})
-        except (AttachmentStoreError, FrontendError, QuizBankStoreError) as exc:
+        except (FrontendError, QuizBankStoreError) as exc:
             self._send_json(400, {"ok": False, "error": str(exc)})
         except Exception as exc:
             self._send_json(500, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})

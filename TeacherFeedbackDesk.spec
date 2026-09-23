@@ -30,7 +30,6 @@ a = Analysis(
     runtime_hooks=[],
     excludes=[
         # Windows-only automation; keep the Mac bundle lean.
-        "pywinauto",
         "tkinter",
     ],
     noarchive=False,

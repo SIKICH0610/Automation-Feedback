@@ -26,22 +26,17 @@ from feedback_common import (
 )
 from paste_comment import comment_payload_for_student
 from paste_mass_notification import mass_notification_payload_for_student, resolve_mass_message
-from paste_attachments import normalized_attachment_paths, stage_attachments
 from paste_common import (
-    DEFAULT_WECOM_TITLE_RE,
-    DEFAULT_WHATSAPP_TITLE_RE,
     DesktopAppSpec,
     DesktopAppStatus,
     JobLoadError,
     JobResult,
     PasteJob,
     clear_clipboard,
-    find_window_by_title_re,
 )
 
-# wecom_win / whatsapp_win reach for pywinauto as soon as a robot is constructed, so
-# they are imported inside the Windows job runners rather than here: importing this
-# module on a Mac must not require a Windows-only dependency.
+# macOS is the only supported platform: the Windows lane (pywinauto robots,
+# attachment staging) was removed and lives in git history if ever needed again.
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -71,42 +66,16 @@ GROUP_CHAT_COLUMN = "Group Chat"
 
 
 
-def build_app_specs(
-    *,
-    wecom_title_re: str,
-    whatsapp_title_re: str,
-) -> dict[str, DesktopAppSpec]:
-    local_app_data = os.environ.get("LOCALAPPDATA", "")
-    program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
-    program_files_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
-
+def build_app_specs() -> dict[str, DesktopAppSpec]:
     return {
         "wecom": DesktopAppSpec(
             key="wecom",
             display_name="WeCom / 企业微信",
-            title_re=wecom_title_re,
-            process_names=("WXWork.exe", "WeCom.exe"),
-            env_path_var="WECOM_EXE",
-            exe_names=("WXWork.exe", "WeCom.exe"),
-            common_paths=(
-                rf"{program_files_x86}\Tencent\WeCom\WXWork.exe",
-                rf"{program_files}\Tencent\WeCom\WXWork.exe",
-                rf"{local_app_data}\Tencent\WXWork\WXWork.exe",
-                rf"{local_app_data}\WXWork\WXWork.exe",
-            ),
             mac_process_name="企业微信",
         ),
         "whatsapp": DesktopAppSpec(
             key="whatsapp",
             display_name="WhatsApp / WhatsApp Web",
-            title_re=whatsapp_title_re,
-            process_names=("WhatsApp.exe", "chrome.exe", "msedge.exe", "brave.exe", "firefox.exe"),
-            env_path_var="WHATSAPP_EXE",
-            exe_names=("WhatsApp.exe",),
-            common_paths=(
-                rf"{local_app_data}\WhatsApp\WhatsApp.exe",
-                rf"{program_files}\WindowsApps\WhatsApp.exe",
-            ),
             uri="https://web.whatsapp.com/",
             mac_process_name="WhatsApp",
         ),
@@ -118,45 +87,23 @@ def header_values(worksheet: Any) -> list[Any]:
 
 
 def automation_dependency_status() -> tuple[bool, str]:
-    if sys.platform == "darwin":
-        try:
-            import pyperclip  # noqa: F401
-        except Exception as exc:
-            return False, f"{type(exc).__name__}: {exc}"
-        if shutil.which("osascript") is None:
-            return False, "osascript was not found on this Mac."
-        return True, ""
-
     try:
-        import pywinauto  # noqa: F401
         import pyperclip  # noqa: F401
     except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
+    if shutil.which("osascript") is None:
+        return False, "osascript was not found on this Mac."
     return True, ""
 
 
-def process_is_running(process_names: tuple[str, ...], *, mac_process_name: str | None = None) -> bool:
-    if sys.platform == "darwin":
-        if not mac_process_name:
-            return False
-        try:
-            result = subprocess.run(["pgrep", "-x", mac_process_name], capture_output=True, text=True, timeout=5)
-        except Exception:
-            return False
-        return result.returncode == 0
-
+def process_is_running(mac_process_name: str | None) -> bool:
+    if not mac_process_name:
+        return False
     try:
-        output = subprocess.check_output(
-            ["tasklist"],
-            text=True,
-            encoding="utf-8",
-            errors="ignore",
-        )
+        result = subprocess.run(["pgrep", "-x", mac_process_name], capture_output=True, text=True, timeout=5)
     except Exception:
         return False
-
-    output_lower = output.lower()
-    return any(process_name.lower() in output_lower for process_name in process_names)
+    return result.returncode == 0
 
 
 def _frozen_app_location_note() -> str:
@@ -241,18 +188,6 @@ def _mac_window_probe(mac_process_name: str) -> tuple[bool, str]:
     return result.stdout.strip() == "true", ""
 
 
-def app_window_found(title_re: str, *, mac_process_name: str | None = None) -> bool:
-    if sys.platform == "darwin":
-        if not mac_process_name or not process_is_running((), mac_process_name=mac_process_name):
-            return False
-        found, _ = _mac_window_probe(mac_process_name)
-        return found
-
-    return find_window_by_title_re(title_re) is not None
-
-
-
-
 def unminimize_app_window(spec: DesktopAppSpec) -> None:
     """Restore minimized windows, best effort.
 
@@ -260,94 +195,70 @@ def unminimize_app_window(spec: DesktopAppSpec) -> None:
     AXMinimized stays true after `activate`), so a batch that minimized WeCom at
     the end would leave the next batch typing into nothing.
     """
-    if sys.platform == "darwin":
-        if not spec.mac_process_name:
-            return
-        script = (
-            "function run() {"
-            '  const se = Application("System Events");'
-            f"  const procs = se.processes.whose({{name: {json.dumps(spec.mac_process_name)}}});"
-            '  if (procs.length === 0) return "no-process";'
-            "  const wins = procs[0].windows();"
-            "  for (let i = 0; i < wins.length; i++) {"
-            '    try { wins[i].attributes["AXMinimized"].value = false; } catch (e) {}'
-            "  }"
-            '  return "ok";'
-            "}"
-        )
-        try:
-            subprocess.run(
-                ["osascript", "-l", "JavaScript", "-e", script],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-        except Exception:
-            pass
+    if not spec.mac_process_name:
         return
-
-    window = find_window_by_title_re(spec.title_re)
-    if window is not None:
-        try:
-            window.restore()
-        except Exception:
-            pass
+    script = (
+        "function run() {"
+        '  const se = Application("System Events");'
+        f"  const procs = se.processes.whose({{name: {json.dumps(spec.mac_process_name)}}});"
+        '  if (procs.length === 0) return "no-process";'
+        "  const wins = procs[0].windows();"
+        "  for (let i = 0; i < wins.length; i++) {"
+        '    try { wins[i].attributes["AXMinimized"].value = false; } catch (e) {}'
+        "  }"
+        '  return "ok";'
+        "}"
+    )
+    try:
+        subprocess.run(
+            ["osascript", "-l", "JavaScript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except Exception:
+        pass
 
 
 def minimize_app_window(spec: DesktopAppSpec) -> dict[str, Any]:
     """Minimize the app's windows, so a finished batch leaves the screen as it was."""
-    if sys.platform == "darwin":
-        if not spec.mac_process_name:
-            return {"ok": False, "message": "no mac process name configured"}
-        script = (
-            "function run() {"
-            '  const se = Application("System Events");'
-            f"  const procs = se.processes.whose({{name: {json.dumps(spec.mac_process_name)}}});"
-            '  if (procs.length === 0) return "no-process";'
-            "  const wins = procs[0].windows();"
-            "  let count = 0;"
-            "  for (let i = 0; i < wins.length; i++) {"
-            '    try { wins[i].attributes["AXMinimized"].value = true; count++; } catch (e) {}'
-            "  }"
-            '  return "minimized:" + count;'
-            "}"
-        )
-        try:
-            result = subprocess.run(
-                ["osascript", "-l", "JavaScript", "-e", script],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-        except Exception as exc:
-            return {"ok": False, "message": str(exc)}
-        if result.returncode != 0:
-            hint = mac_permission_hint(result.stderr)
-            return {"ok": False, "message": hint or result.stderr.strip()}
-        return {"ok": True, "message": result.stdout.strip()}
-
-    window = find_window_by_title_re(spec.title_re)
-    if window is None:
-        return {"ok": False, "message": "window not found"}
+    if not spec.mac_process_name:
+        return {"ok": False, "message": "no mac process name configured"}
+    script = (
+        "function run() {"
+        '  const se = Application("System Events");'
+        f"  const procs = se.processes.whose({{name: {json.dumps(spec.mac_process_name)}}});"
+        '  if (procs.length === 0) return "no-process";'
+        "  const wins = procs[0].windows();"
+        "  let count = 0;"
+        "  for (let i = 0; i < wins.length; i++) {"
+        '    try { wins[i].attributes["AXMinimized"].value = true; count++; } catch (e) {}'
+        "  }"
+        '  return "minimized:" + count;'
+        "}"
+    )
     try:
-        window.minimize()
+        result = subprocess.run(
+            ["osascript", "-l", "JavaScript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
     except Exception as exc:
-        return {"ok": False, "message": f"{type(exc).__name__}: {exc}"}
-    return {"ok": True, "message": "minimized"}
+        return {"ok": False, "message": str(exc)}
+    if result.returncode != 0:
+        hint = mac_permission_hint(result.stderr)
+        return {"ok": False, "message": hint or result.stderr.strip()}
+    return {"ok": True, "message": result.stdout.strip()}
 
 
 def app_status(spec: DesktopAppSpec) -> DesktopAppStatus:
     dependency_ok, dependency_error = automation_dependency_status()
-    running = process_is_running(spec.process_names, mac_process_name=spec.mac_process_name)
+    running = process_is_running(spec.mac_process_name)
     permission_error = ""
-    if not dependency_ok:
-        window_found = False
-    elif sys.platform == "darwin":
-        window_found = False
-        if spec.mac_process_name and running:
-            window_found, permission_error = _mac_window_probe(spec.mac_process_name)
-    else:
-        window_found = app_window_found(spec.title_re, mac_process_name=spec.mac_process_name)
+    window_found = False
+    if dependency_ok and spec.mac_process_name and running:
+        window_found, permission_error = _mac_window_probe(spec.mac_process_name)
 
     if not dependency_ok:
         message = "desktop automation dependencies are not available"
@@ -372,56 +283,20 @@ def app_status(spec: DesktopAppSpec) -> DesktopAppStatus:
     )
 
 
-def launch_candidates(spec: DesktopAppSpec, configured_path: Path | None) -> list[str]:
-    candidates: list[str] = []
-    if configured_path:
-        candidates.append(str(configured_path))
-
-    env_path = os.environ.get(spec.env_path_var, "").strip()
-    if env_path:
-        candidates.append(env_path)
-
-    for exe_name in spec.exe_names:
-        found = shutil.which(exe_name)
-        if found:
-            candidates.append(found)
-
-    candidates.extend(spec.common_paths)
-    return candidates
-
-
-def launch_app(spec: DesktopAppSpec, configured_path: Path | None = None) -> bool:
-    if sys.platform == "darwin":
-        if spec.mac_process_name:
-            result = subprocess.run(["open", "-a", spec.mac_process_name], capture_output=True, text=True)
-            if result.returncode == 0:
-                return True
-        if spec.uri:
-            result = subprocess.run(["open", spec.uri], capture_output=True, text=True)
-            return result.returncode == 0
-        return False
-
-    for candidate in launch_candidates(spec, configured_path):
-        candidate_path = Path(candidate).expanduser()
-        if not candidate_path.exists():
-            continue
-        subprocess.Popen([str(candidate_path)])
-        return True
-
-    if spec.uri:
-        try:
-            os.startfile(spec.uri)  # type: ignore[attr-defined]
+def launch_app(spec: DesktopAppSpec) -> bool:
+    if spec.mac_process_name:
+        result = subprocess.run(["open", "-a", spec.mac_process_name], capture_output=True, text=True)
+        if result.returncode == 0:
             return True
-        except OSError:
-            return False
-
+    if spec.uri:
+        result = subprocess.run(["open", spec.uri], capture_output=True, text=True)
+        return result.returncode == 0
     return False
 
 
 def ensure_app_available(
     spec: DesktopAppSpec,
     *,
-    configured_path: Path | None = None,
     open_if_missing: bool = False,
     settle_seconds: float = 3,
 ) -> DesktopAppStatus:
@@ -431,14 +306,11 @@ def ensure_app_available(
     if not status.dependency_ok:
         return status
 
-    launched = launch_app(spec, configured_path)
+    launched = launch_app(spec)
     status.launch_attempted = True
     status.launched = launched
     if not launched:
-        status.message = (
-            f"could not launch automatically; open {spec.display_name} manually or set "
-            f"{spec.env_path_var} / pass an explicit exe path"
-        )
+        status.message = f"could not launch automatically; open {spec.display_name} manually"
         return status
 
     time.sleep(settle_seconds)
@@ -455,34 +327,12 @@ def print_app_status(status: DesktopAppStatus) -> None:
     print(f"  dependency ok: {'yes' if status.dependency_ok else 'no'}")
     if status.dependency_error:
         print(f"  dependency error: {status.dependency_error}")
-        print("  install command: py -3.11 -m pip install -r requirements.txt")
+        print("  install command: .venv/bin/pip install -r requirements.txt")
     print(f"  process running: {'yes' if status.process_running else 'no'}")
     print(f"  window found: {'yes' if status.window_found else 'no'}")
     if status.launch_attempted:
         print(f"  launch attempted: yes")
         print(f"  launch command accepted: {'yes' if status.launched else 'no'}")
-
-
-def print_matching_window_titles(title_re: str) -> None:
-    try:
-        from pywinauto import Desktop
-    except Exception as exc:
-        print(f"Could not inspect windows: {type(exc).__name__}: {exc}")
-        return
-
-    pattern = re.compile(title_re)
-    found = False
-    for window in Desktop(backend="uia").windows():
-        try:
-            title = window.window_text().strip()
-        except Exception:
-            continue
-        if title and pattern.search(title):
-            found = True
-            print(f"Matched window title: {title}")
-
-    if not found:
-        print(f"No top-level windows matched: {title_re}")
 
 
 def value_for(student: StudentRow, column_name: str) -> str:
@@ -786,14 +636,6 @@ def print_job(job: PasteJob) -> None:
     print()
 
 
-def configured_exe_for_app(args: argparse.Namespace, app_key: str) -> Path | None:
-    if app_key == "wecom":
-        return args.wecom_exe
-    if app_key == "whatsapp":
-        return args.whatsapp_exe
-    return None
-
-
 def print_readiness(job: PasteJob, status: DesktopAppStatus) -> None:
     print_app_status(status)
     ready = status.dependency_ok and status.window_found
@@ -866,13 +708,6 @@ def build_parser(
         help="Text file containing the shared message used with --action mass-notification.",
     )
     parser.add_argument(
-        "--attachment",
-        action="append",
-        type=Path,
-        default=[],
-        help="Image or document to stage in the chat preview. Repeat for multiple files.",
-    )
-    parser.add_argument(
         "--status",
         action="store_true",
         help="Check workbook row, needed app, and desktop automation readiness without pasting.",
@@ -881,11 +716,6 @@ def build_parser(
         "--open-app",
         action="store_true",
         help="Open the app needed for this row if it is not already available, then stop unless a paste mode is selected.",
-    )
-    parser.add_argument(
-        "--debug-search-results",
-        action="store_true",
-        help="Search WeCom / 企业微信 and print safe candidate UI elements without opening, pasting, or sending.",
     )
     parser.add_argument(
         "--channel",
@@ -916,11 +746,6 @@ def build_parser(
         help="Minimize the app's windows, print result JSON, and exit.",
     )
     parser.add_argument(
-        "--debug-window-titles",
-        action="store_true",
-        help="Print app window titles that match the selected channel without pasting.",
-    )
-    parser.add_argument(
         "--mode",
         choices=["dry-run", "paste-only"],
         default="dry-run",
@@ -932,39 +757,9 @@ def build_parser(
         help="In paste-only mode, do not try to launch the needed app automatically.",
     )
     parser.add_argument(
-        "--auto-open-search-result",
-        action="store_true",
-        help="After searching WeCom / 企业微信, press Enter only.",
-    )
-    parser.add_argument(
-        "--ui-control-result-open",
-        action="store_true",
-        help="After searching WeCom / 企业微信, open a matching result with UI Automation.",
-    )
-    parser.add_argument(
-        "--keyboard-result-open",
-        action="store_true",
-        help="After searching WeCom / 企业微信, use Down then Enter to open the first result.",
-    )
-    parser.add_argument(
-        "--manual-result-click",
-        action="store_true",
-        help="After searching WeCom / 企业微信, wait for you to click the search result.",
-    )
-    parser.add_argument(
         "--require-verification",
         action="store_true",
         help="Stop before pasting if the script cannot verify the WeCom chat by visible UI text.",
-    )
-    parser.add_argument("--wecom-title-re", default=DEFAULT_WECOM_TITLE_RE)
-    parser.add_argument("--whatsapp-title-re", default=DEFAULT_WHATSAPP_TITLE_RE)
-    parser.add_argument("--wecom-exe", type=Path, help="Optional explicit path to WXWork.exe / WeCom.exe.")
-    parser.add_argument("--whatsapp-exe", type=Path, help="Optional explicit path to WhatsApp.exe.")
-    parser.add_argument("--search-shortcut", default="^f")
-    parser.add_argument(
-        "--whatsapp-search-shortcut",
-        default="^f",
-        help="Keyboard shortcut used to open WhatsApp search. Default is Ctrl+F.",
     )
     parser.add_argument(
         "--no-status-write",
@@ -972,18 +767,6 @@ def build_parser(
         help="Do not write Send Status, Send Error, or Last Attempt back to the workbook.",
     )
     return parser
-
-
-def open_strategy_from_args(args: argparse.Namespace) -> str:
-    if args.manual_result_click:
-        return "manual-click"
-    if args.auto_open_search_result:
-        return "enter"
-    if args.ui_control_result_open:
-        return "ui-control"
-    if args.keyboard_result_open:
-        return "keyboard"
-    return "enter-first"
 
 
 def ensure_desktop_ready(
@@ -994,7 +777,6 @@ def ensure_desktop_ready(
 ) -> DesktopAppStatus:
     status = ensure_app_available(
         app_spec,
-        configured_path=app_exe,
         open_if_missing=not no_auto_open,
     )
     print_app_status(status)
@@ -1032,7 +814,6 @@ _desktop_ready_cache: set[str] = set()
 def ensure_desktop_ready_once(
     app_spec: DesktopAppSpec,
     *,
-    app_exe: Path | None,
     no_auto_open: bool,
 ) -> None:
     """ensure_desktop_ready, but only actually checked once per app per process.
@@ -1044,7 +825,7 @@ def ensure_desktop_ready_once(
     """
     if app_spec.key in _desktop_ready_cache:
         return
-    ensure_desktop_ready(app_spec, app_exe=app_exe, no_auto_open=no_auto_open)
+    ensure_desktop_ready(app_spec, no_auto_open=no_auto_open)
     _desktop_ready_cache.add(app_spec.key)
 
 
@@ -1114,197 +895,20 @@ def _run_wecom_job_mac(job: PasteJob, *, args: argparse.Namespace) -> JobResult:
 
     if job.feedback:
         robot.paste_feedback(job.feedback)
-    if args.attachments:
-        print("Attachment paste is not yet supported on macOS; skipping attachments for this row.")
     return JobResult(status="pasted", pasted=True)
 
 
-def run_wecom_job(
-    job: PasteJob,
-    *,
-    args: argparse.Namespace,
-    app_spec: DesktopAppSpec,
-    app_exe: Path | None,
-) -> JobResult:
-    if sys.platform == "darwin":
-        return _run_wecom_job_mac(job, args=args)
+def run_wecom_job(job: PasteJob, *, args: argparse.Namespace) -> JobResult:
+    return _run_wecom_job_mac(job, args=args)
 
-    from wecom_win import (
-        WECOM_MATCH_HEIGHT_RATIO,
-        WeComPasteRobot,
-        _clear_wecom_search_box,
-        _ensure_wecom_search_open,
-        _wecom_dropdown_height,
-        _wecom_no_match_baseline,
-        _wecom_reset_search_session,
+
+def run_whatsapp_job(job: PasteJob, *, args: argparse.Namespace) -> JobResult:
+    # WhatsApp's macOS port (search, verification) is still being worked out --
+    # see whatsapp_mac.py for the in-progress version.
+    return JobResult(
+        status="needs_review",
+        error="WhatsApp paste automation is not yet available on macOS. Send this row manually for now.",
     )
-
-    if job.action == "check-group-chat":
-        ensure_desktop_ready_once(app_spec, app_exe=app_exe, no_auto_open=args.no_auto_open)
-    else:
-        ensure_desktop_ready(app_spec, app_exe=app_exe, no_auto_open=args.no_auto_open)
-    robot = WeComPasteRobot(
-        title_re=args.wecom_title_re,
-        search_shortcut=args.search_shortcut,
-    )
-
-    if job.action == "check-group-chat":
-        # Always searches by uid only, never by name. Never opens a chat -- just measures
-        # the search dropdown's height against a live-measured baseline; see
-        # _wecom_dropdown_height and _wecom_no_match_baseline for why.
-        _ensure_wecom_search_open(robot)
-        baseline = _wecom_no_match_baseline(robot)
-        height = _wecom_dropdown_height(robot, job.search_key)
-        if height == 0:
-            # Nothing on screen changed, so the keystrokes did not reach the search box --
-            # focus was lost since the last student. Re-open search and measure again
-            # rather than reporting a not_found that never actually got searched.
-            print("WeCom search box lost focus; reopening and retrying.")
-            _wecom_reset_search_session()
-            _ensure_wecom_search_open(robot)
-            height = _wecom_dropdown_height(robot, job.search_key)
-        _clear_wecom_search_box(robot)
-        threshold = baseline * WECOM_MATCH_HEIGHT_RATIO
-        verified = height > threshold
-        print(
-            f"Verification: dropdown height {height}px "
-            f"(baseline {baseline}px, threshold {threshold:.0f}px)"
-        )
-        status = "verified" if verified else "not_found"
-        print(f"Group chat check: {status}")
-        return JobResult(status=status)
-
-    if args.debug_search_results:
-        robot.print_search_result_candidates(job)
-        return JobResult(status="checked")
-
-    try:
-        robot.open_chat_from_search(
-            job,
-            open_strategy=open_strategy_from_args(args),
-        )
-    except Exception:
-        robot.clear_search_state(job)
-        raise
-
-    verified, reason = robot.verify_chat(job)
-    print(f"Verification: {reason}")
-    if not verified:
-        robot.print_visible_text_debug()
-        if args.require_verification:
-            raise LookupError("WeCom chat could not be verified.")
-        print("WARNING: Could not verify the chat automatically. Continuing because paste-only does not send.")
-
-    if job.feedback:
-        robot.paste_feedback(job.feedback)
-    if args.attachments:
-        stage_attachments(args.attachments, send_keys=robot.send_keys)
-    else:
-        robot.clear_search_state(job)
-        print("Cleared WeCom search box for the next row.")
-    return JobResult(status="pasted", pasted=True)
-
-
-def run_whatsapp_job(
-    job: PasteJob,
-    *,
-    args: argparse.Namespace,
-    app_spec: DesktopAppSpec,
-    app_exe: Path | None,
-) -> JobResult:
-    if sys.platform == "darwin":
-        # WeCom automation was ported to macOS first since most rows route there;
-        # WhatsApp's macOS port (search, verification) is still being worked out --
-        # see whatsapp_mac.py for the in-progress version.
-        return JobResult(
-            status="needs_review",
-            error="WhatsApp paste automation is not yet available on macOS. Send this row manually for now.",
-        )
-
-    from whatsapp_win import WhatsAppPasteRobot
-
-    if job.action == "check-group-chat":
-        if job.whatsapp_target_type == "phone":
-            return JobResult(
-                status="needs_review",
-                error="Phone-target WhatsApp rows cannot be checked by search; verify manually.",
-            )
-        if not job.search_key:
-            return JobResult(
-                status="needs_review",
-                error="WhatsApp group_search needs WhatsApp Search Key or uid.",
-            )
-        ensure_desktop_ready_once(app_spec, app_exe=app_exe, no_auto_open=args.no_auto_open)
-        robot = WhatsAppPasteRobot(
-            title_re=args.whatsapp_title_re,
-            search_shortcut=args.whatsapp_search_shortcut,
-        )
-        # WhatsApp Desktop/Web is a standard Electron app and (unlike WeCom) does expose
-        # real UI Automation text, so this trusts verify_chat's uid/search-key/name check.
-        # If this turns out to have the same false-positive risk WeCom's text check did
-        # (a name fragment coincidentally matching something else on screen), it should
-        # switch to the same dropdown-height approach used for WeCom instead.
-        try:
-            robot.open_chat_from_search(job)
-        except LookupError as exc:
-            robot.clear_search_state(job.search_key)
-            print(f"Group chat check: not_found ({exc})")
-            return JobResult(status="not_found")
-        verified, reason = robot.verify_chat(job)
-        print(f"Verification: {reason}")
-        robot.clear_search_state(job.search_key)
-        status = "verified" if verified else "not_found"
-        print(f"Group chat check: {status}")
-        return JobResult(status=status)
-
-    if job.whatsapp_target_type == "phone":
-        if not job.whatsapp_phone:
-            raise LookupError("WhatsApp phone mode needs a WhatsApp Phone value.")
-        url = f"https://wa.me/{job.whatsapp_phone}"
-        if job.feedback:
-            url += f"?text={quote(job.feedback)}"
-        os.startfile(url)  # type: ignore[attr-defined]
-        time.sleep(3)
-        if args.attachments:
-            ensure_desktop_ready(app_spec, app_exe=app_exe, no_auto_open=args.no_auto_open)
-            robot = WhatsAppPasteRobot(
-                title_re=args.whatsapp_title_re,
-                search_shortcut=args.whatsapp_search_shortcut,
-            )
-            robot.focus_window()
-            stage_attachments(args.attachments, send_keys=robot.send_keys)
-        return JobResult(status="pasted", pasted=True)
-
-    if not job.search_key:
-        raise LookupError("WhatsApp group_search needs WhatsApp Search Key or uid.")
-
-    ensure_desktop_ready(app_spec, app_exe=app_exe, no_auto_open=args.no_auto_open)
-    robot = WhatsAppPasteRobot(
-        title_re=args.whatsapp_title_re,
-        search_shortcut=args.whatsapp_search_shortcut,
-    )
-    try:
-        robot.open_chat_from_search(job)
-    except Exception:
-        robot.clear_search_state(job.search_key)
-        raise
-
-    verified, reason = robot.verify_chat(job)
-    print(f"Verification: {reason}")
-    if not verified:
-        if args.require_verification:
-            raise LookupError("WhatsApp chat could not be verified.")
-        print("WARNING: Could not verify the WhatsApp chat automatically. Continuing because paste-only does not send.")
-
-    if job.feedback:
-        robot.paste_feedback(job.feedback)
-    if args.attachments:
-        stage_attachments(args.attachments, send_keys=robot.send_keys)
-    else:
-        robot.clear_search_state(job.search_key)
-        print("Cleared WhatsApp search box for the next row.")
-
-    return JobResult(status="pasted", pasted=True)
 
 
 def run_job(
@@ -1332,7 +936,6 @@ def run_job(
         return JobResult(status="needs_review", error=f"No desktop app setup is defined for channel {job.channel!r}.")
 
     app_spec = app_specs[job.channel]
-    app_exe = configured_exe_for_app(args, job.channel)
 
     if args.status:
         status = app_status(app_spec)
@@ -1346,36 +949,23 @@ def run_job(
     if args.open_app:
         status = ensure_app_available(
             app_spec,
-            configured_path=app_exe,
             open_if_missing=True,
         )
         print_readiness(job, status)
         if args.mode == "dry-run":
             return JobResult(status="checked")
 
-    if args.mode == "dry-run" and not args.debug_search_results:
+    if args.mode == "dry-run":
         print("Dry run only. Nothing was pasted or sent.")
         return JobResult(status="dry_run")
 
     def attempt(current_job: PasteJob) -> JobResult:
-        current_spec = app_specs[current_job.channel]
-        current_exe = configured_exe_for_app(args, current_job.channel)
         clear_clipboard()
         try:
             if current_job.channel == "wecom":
-                return run_wecom_job(
-                    current_job,
-                    args=args,
-                    app_spec=current_spec,
-                    app_exe=current_exe,
-                )
+                return run_wecom_job(current_job, args=args)
             if current_job.channel == "whatsapp":
-                return run_whatsapp_job(
-                    current_job,
-                    args=args,
-                    app_spec=current_spec,
-                    app_exe=current_exe,
-                )
+                return run_whatsapp_job(current_job, args=args)
             return JobResult(
                 status="needs_review",
                 error=f"Unsupported channel {current_job.channel!r}.",
@@ -1466,10 +1056,7 @@ def main(
         # Readiness probe only: no workbook, no rows, no automation beyond looking for
         # the app windows. Callers (the frontend's bulk check) run this in its own
         # process because pywinauto/COM is unreliable inside a threaded HTTP server.
-        specs = build_app_specs(
-            wecom_title_re=args.wecom_title_re,
-            whatsapp_title_re=args.whatsapp_title_re,
-        )
+        specs = build_app_specs()
         report = {
             key: {
                 "display_name": status.display_name,
@@ -1487,10 +1074,7 @@ def main(
     if args.prepare_app:
         # Bring the window up so a bulk run can start against an app that sits in
         # the background with its window closed.
-        specs = build_app_specs(
-            wecom_title_re=args.wecom_title_re,
-            whatsapp_title_re=args.whatsapp_title_re,
-        )
+        specs = build_app_specs()
         spec = specs[args.prepare_app]
         status = app_status(spec)
         launched = False
@@ -1519,14 +1103,10 @@ def main(
         return
 
     if args.minimize_app:
-        specs = build_app_specs(
-            wecom_title_re=args.wecom_title_re,
-            whatsapp_title_re=args.whatsapp_title_re,
-        )
+        specs = build_app_specs()
         print(json.dumps(minimize_app_window(specs[args.minimize_app]), ensure_ascii=False))
         return
 
-    args.attachments = normalized_attachment_paths(args.attachment)
     class_review = args.class_review
     if args.class_review_file:
         class_review = args.class_review_file.read_text(encoding="utf-8").strip()
@@ -1545,14 +1125,8 @@ def main(
         mass_message_file=args.mass_message_file,
         fallback_text=class_review,
     )
-    if args.action == "mass-notification" and not mass_message and not args.attachments:
-        raise SystemExit(
-            "Mass notification needs announcement text, at least one attachment, or both."
-        )
-    if args.attachments:
-        print(
-            f"Attachment mode: {len(args.attachments)} file(s) will be staged for manual review."
-        )
+    if args.action == "mass-notification" and not mass_message:
+        raise SystemExit("Mass notification needs announcement text.")
 
     jobs = load_jobs(
         args.workbook,
@@ -1565,15 +1139,7 @@ def main(
         action=args.action,
         mass_message=mass_message,
     )
-    if args.attachments and len(jobs) != 1:
-        raise SystemExit(
-            "Attachment previews require manual review. Select exactly one row for each run."
-        )
-
-    app_specs = build_app_specs(
-        wecom_title_re=args.wecom_title_re,
-        whatsapp_title_re=args.whatsapp_title_re,
-    )
+    app_specs = build_app_specs()
 
     batch_mode = len(jobs) > 1
     should_write_status = args.mode == "paste-only" and not args.no_status_write

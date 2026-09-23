@@ -16,7 +16,6 @@ from uuid import uuid4
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
 
-from attachment_store import SQLiteAttachmentStore
 from quiz_bank_store import SQLiteQuizBankStore
 
 
@@ -263,10 +262,6 @@ class SQLiteFeedbackStore:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize_database()
         self.quiz_banks = SQLiteQuizBankStore(
-            self.database_path,
-            lock=self.lock,
-        )
-        self.attachments = SQLiteAttachmentStore(
             self.database_path,
             lock=self.lock,
         )
@@ -993,7 +988,6 @@ class SQLiteFeedbackStore:
                 "1": self.read_quiz_recap(sheet_name, "1"),
                 "2": self.read_quiz_recap(sheet_name, "2"),
             },
-            "attachments": self.list_attachments(sheet_name),
         }
 
     def search_students(self, query: str, limit: int = 50) -> list[dict[str, Any]]:
@@ -1048,37 +1042,6 @@ class SQLiteFeedbackStore:
     def list_quiz_banks(self) -> list[dict[str, Any]]:
         return self.quiz_banks.list_banks()
 
-    def list_attachments(self, sheet_name: str) -> list[dict[str, Any]]:
-        return self.attachments.list_for_sheet(sheet_name)
-
-    def add_attachment(
-        self,
-        sheet_name: str,
-        *,
-        filename: str,
-        content_type: str,
-        file_data: bytes,
-    ) -> dict[str, Any]:
-        return self.attachments.add(
-            sheet_name,
-            filename=filename,
-            content_type=content_type,
-            file_data=file_data,
-        )
-
-    def remove_attachment(self, sheet_name: str, attachment_id: str) -> None:
-        self.attachments.remove(sheet_name, attachment_id)
-
-    def get_attachment(self, attachment_id: str) -> dict[str, Any]:
-        return self.attachments.get(attachment_id)
-
-    def materialize_attachments(
-        self,
-        sheet_name: str,
-        attachment_ids: list[str],
-        target_dir: Path,
-    ) -> list[Path]:
-        return self.attachments.materialize(sheet_name, attachment_ids, target_dir)
     def load_quiz_bank(self, bank_id: str) -> dict[str, Any]:
         return self.quiz_banks.load_bank(bank_id)
 
