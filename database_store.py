@@ -1165,7 +1165,7 @@ class SQLiteFeedbackStore:
         with self.lock, self._connect() as connection:
             class_row = self._class_row(connection, sheet_name)
             connection.execute("DELETE FROM classes WHERE id = ?", (int(class_row["id"]),))
-            # Deleting the class row cascades to its columns, students, and attachments
+            # Deleting the class row cascades to its columns and students
             # (all declared ON DELETE CASCADE), but the template workbook is a plain file
             # rebuilt only on template-missing or new-class-import, so it needs an
             # explicit refresh here or it would keep a stale sheet for the deleted class.

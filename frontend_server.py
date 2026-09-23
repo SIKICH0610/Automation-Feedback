@@ -151,23 +151,30 @@ class ActionRunner:
             parsed.append(row_number)
         return ",".join(str(row) for row in sorted(set(parsed)))
 
-    def command_for(self, payload: dict[str, Any]) -> tuple[list[str], str]:
+    def command_for(
+        self,
+        payload: dict[str, Any],
+        *,
+        sheet_name: str | None = None,
+        row_spec: str | None = None,
+        bulk: bool = False,
+    ) -> tuple[list[str], str]:
+        """The one place a worker command line is built.
+
+        Bulk runs call this per class with an explicit sheet and row list; a
+        single run reads both from the payload. The only genuine difference is
+        --no-auto-open: a bulk run has already prepared the app window itself.
+        """
         action = str(payload.get("action") or "").strip()
-        sheet_name = str(payload.get("sheet") or "").strip()
+        if bulk:
+            action = action.removesuffix("-bulk")
+        if sheet_name is None:
+            sheet_name = str(payload.get("sheet") or "").strip()
         if sheet_name not in self.store.sheet_names():
             raise FrontendError(f"Sheet {sheet_name!r} was not found.")
-        row_spec = self._row_spec(payload.get("rows"))
-        announcement_path = self.store.announcement_path(sheet_name)
-        # Paragraph 1 of a generated comment comes from the teacher's lesson recap, not
-        # from the announcement. The announcement is separately pasted to whole classes,
-        # so reusing it here put things like "next week is cancelled" at the top of every
-        # student's feedback.
-        class_review_args = [
-            "--class-review",
-            self.store.read_lesson_recap(sheet_name),
-            "--closing-note",
-            self.store.read_closing_note(sheet_name),
-        ]
+        if row_spec is None:
+            row_spec = self._row_spec(payload.get("rows"))
+        bulk_args = ["--no-auto-open"] if bulk else []
         common = [
             "--workbook",
             str(self.store.workbook_path),
@@ -187,7 +194,14 @@ class ActionRunner:
                 "general",
                 "--feedback-column",
                 "Feedback",
-                *class_review_args,
+                # Paragraph 1 comes from the teacher's lesson recap, not from the
+                # announcement. The announcement is separately pasted to whole
+                # classes, so reusing it here put things like "next week is
+                # cancelled" at the top of every student's feedback.
+                "--class-review",
+                self.store.read_lesson_recap(sheet_name),
+                "--closing-note",
+                self.store.read_closing_note(sheet_name),
                 *ai_args,
             ], "Generated comments"
 
@@ -198,7 +212,7 @@ class ActionRunner:
                 "--action",
                 "mass-notification",
                 "--mass-message-file",
-                str(announcement_path),
+                str(self.store.announcement_path(sheet_name)),
                 "--mode",
                 "paste-only",
                 "--fallback-channel",
@@ -214,6 +228,7 @@ class ActionRunner:
                 "Feedback",
                 "--mode",
                 "paste-only",
+                *bulk_args,
             ], "Pasted comments"
 
         if action == "check-group-chat":
@@ -226,6 +241,7 @@ class ActionRunner:
                 "paste-only",
                 "--channel",
                 self._check_channel(payload),
+                *bulk_args,
             ], "Checked group chat status"
 
         if action in {"generate-quiz-feedback", "paste-quiz-feedback"}:
@@ -401,55 +417,12 @@ class ActionRunner:
 
                             job["on_row"] = _on_row
 
-                    common = [
-                        "--workbook",
-                        str(self.store.workbook_path),
-                        "--sheet",
-                        sheet_name,
-                        "--rows",
-                        ",".join(str(row) for row in sorted(rows)),
-                    ]
-                    if action == "generate-comments-bulk":
-                        ai_args = ["--ai-polish"] if ai_polish.ai_status_cached()["available"] else []
-                        command = [
-                            *worker_command("feedback_generator"),
-                            *common,
-                            "--write",
-                            "--feedback-type",
-                            "general",
-                            "--feedback-column",
-                            "Feedback",
-                            # Each class opens with its own lesson recap.
-                            "--class-review",
-                            self.store.read_lesson_recap(sheet_name),
-                            "--closing-note",
-                            self.store.read_closing_note(sheet_name),
-                            *ai_args,
-                        ]
-                    elif action == "paste-comments-bulk":
-                        command = [
-                            *worker_command("paste_sender"),
-                            *common,
-                            "--action",
-                            "comment",
-                            "--message-column",
-                            "Feedback",
-                            "--mode",
-                            "paste-only",
-                            "--no-auto-open",
-                        ]
-                    else:
-                        command = [
-                            *worker_command("paste_sender"),
-                            *common,
-                            "--action",
-                            "check-group-chat",
-                            "--mode",
-                            "paste-only",
-                            "--no-auto-open",
-                            "--channel",
-                            channel,
-                        ]
+                    command, _ = self.command_for(
+                        payload,
+                        sheet_name=sheet_name,
+                        row_spec=",".join(str(row) for row in sorted(rows)),
+                        bulk=True,
+                    )
                     try:
                         returncode, body, class_cancelled = self._run_child(
                             command, environment, label=f"{verb} ({sheet_name})", job=job
